@@ -236,3 +236,21 @@ def test_sample_handler_leaves_map_untouched(monkeypatch):
         assert json.loads((mdir / "sample.json").read_text()) == {"profile": "tourist", "bbox": bbox}
         m = c.get(f"/api/maps/{map_id}").json()
         assert m["status"] == "ready" and m["profile"] == "classic"
+
+
+def test_label_styles_use_only_bundled_fonts_and_glyphs_are_served():
+    s = get_settings()
+    fonts_dir = s.styles_dir / "fonts"
+    for style_id in ("classic", "tourist"):
+        doc = json.loads((s.styles_dir / style_id / "style.json").read_text(encoding="utf-8"))
+        used = {f for l in doc["layers"] if l["type"] == "symbol" for f in l["layout"]["text-font"]}
+        assert used, style_id
+        for font in used:
+            assert (fonts_dir / font / "0-255.pbf").is_file(), (style_id, font)
+            assert (fonts_dir / font / "256-511.pbf").is_file()  # Polish letters live here
+    with TestClient(app) as c:
+        map_id = _map_with_files()
+        st = c.get(f"/api/maps/{map_id}/style/classic.json").json()
+        assert st["glyphs"].endswith("/styles/fonts/{fontstack}/{range}.pbf")
+        r = c.get("/styles/fonts/Noto%20Sans%20Regular/256-511.pbf")
+        assert r.status_code == 200 and len(r.content) > 1000

@@ -147,6 +147,9 @@ function populateStyles(profile: string) {
 async function loadStyles() {
   styles = await api.styles();
   populateStyles("classic");
+  // Labelled classic style is the default view when present.
+  const sel = $<HTMLSelectElement>("style");
+  if ([...sel.options].some((o) => o.value === "classic")) sel.value = "classic";
   $<HTMLSelectElement>("style").onchange = applyStyle;
 }
 
