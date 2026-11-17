@@ -74,6 +74,27 @@ make deb
 sudo apt install -y ./build/osm-tilegen_*_$(dpkg --print-architecture).deb
 ```
 
+Podniesienie wersji przed budową (żeby `apt` na pewno zainstalował nowy pakiet):
+
+```bash
+grep __version__ backend/app/__init__.py                       # aktualna wersja
+sed -i 's/^__version__ = ".*"/__version__ = "0.1.3"/' backend/app/__init__.py
+```
+
+Szybka aktualizacja samych stylów lub profili importu (bez budowania `.deb`),
+np. po `git pull` zmieniającym tylko `styles/` albo `tilemaker/`:
+
+```bash
+cd osm-tilegen && git pull
+sudo cp -r styles/. /usr/share/osm-tilegen/styles/
+sudo cp -r tilemaker/. /usr/share/osm-tilegen/tilemaker/
+sudo systemctl restart osm-tilegen osm-tilegen-worker
+```
+
+Zmiany w `styles/` widać od razu po odświeżeniu przeglądarki (Ctrl+F5). Zmiany
+w `tilemaker/` (nowe warstwy danych, np. POI, numery domów) dotyczą dopiero
+**nowych importów**: zaimportuj mapę ponownie w oknie „Zarządzaj mapami…”.
+
 Uwagi:
 - Jeśli zmieniła się tylko treść, a numer wersji nie (`backend/app/__init__.py`),
   `apt` może uznać pakiet za już zainstalowany. Wtedy użyj:
