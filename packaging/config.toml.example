@@ -12,9 +12,9 @@ frontend_dist = "/usr/share/osm-tilegen/ui"
 [import]
 tilemaker_bin = "tilemaker"
 osmium_bin    = "osmium"
-# Without these tilemaker uses its bundled OpenMapTiles config:
-# tilemaker_config  = "/usr/share/osm-tilegen/tilemaker/config-openmaptiles.json"
-# tilemaker_process = "/usr/share/osm-tilegen/tilemaker/process-openmaptiles.lua"
+# Defaults: the profile bundled with osm-tilegen (/usr/share/osm-tilegen/tilemaker).
+# tilemaker_config  = "/usr/share/osm-tilegen/tilemaker/config.json"
+# tilemaker_process = "/usr/share/osm-tilegen/tilemaker/process.lua"
 # Low-RAM machines (Raspberry Pi): keep tilemaker's working data on disk.
 store_on_disk = false
 coverage_zoom = 10

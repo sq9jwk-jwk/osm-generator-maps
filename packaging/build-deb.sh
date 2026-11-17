@@ -18,6 +18,7 @@ cp -r "$ROOT/backend/app" "$STAGE/usr/lib/osm-tilegen/"
 find "$STAGE/usr/lib/osm-tilegen" -name __pycache__ -prune -exec rm -rf {} +
 cp -r "$ROOT/frontend/dist" "$STAGE/usr/share/osm-tilegen/ui"
 cp -r "$ROOT/styles" "$STAGE/usr/share/osm-tilegen/styles"
+cp -r "$ROOT/tilemaker" "$STAGE/usr/share/osm-tilegen/tilemaker"
 cp "$ROOT/packaging/config.toml.example" "$STAGE/usr/share/osm-tilegen/"
 cp "$ROOT/packaging/systemd/"*.service "$STAGE/lib/systemd/system/"
 

@@ -61,6 +61,14 @@ def _opt_path(value: str | None) -> Path | None:
     return Path(value) if value else None
 
 
+def _bundled_tilemaker_file(name: str) -> Path | None:
+    """Our bundled tilemaker config/profile (repo checkout or installed package)."""
+    for base in (REPO_ROOT / "tilemaker", Path("/usr/share/osm-tilegen/tilemaker")):
+        if (base / name).is_file():
+            return base / name
+    return None
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     env = os.environ.get("OSMTILE_CONFIG")
@@ -85,8 +93,10 @@ def get_settings() -> Settings:
         render_engine=render.get("engine", "debug"),
         tilemaker_bin=importer.get("tilemaker_bin", "tilemaker"),
         osmium_bin=importer.get("osmium_bin", "osmium"),
-        tilemaker_config=_opt_path(importer.get("tilemaker_config")),
-        tilemaker_process=_opt_path(importer.get("tilemaker_process")),
+        tilemaker_config=_opt_path(importer.get("tilemaker_config"))
+        or _bundled_tilemaker_file("config.json"),
+        tilemaker_process=_opt_path(importer.get("tilemaker_process"))
+        or _bundled_tilemaker_file("process.lua"),
         tilemaker_store=bool(importer.get("store_on_disk", False)),
         water_polygons=_opt_path(importer.get("water_polygons")),
         coverage_zoom=int(importer.get("coverage_zoom", 10)),
