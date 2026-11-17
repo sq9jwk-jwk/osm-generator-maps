@@ -85,7 +85,7 @@ def build_style(style_id: str, map_id: str, base_url: str, variant: str = "") ->
             query = f"?variant={variant}" if variant else ""
             src["tiles"] = [f"{base}/api/maps/{map_id}/tiles/{{z}}/{{x}}/{{y}}.pbf{query}"]
             src["minzoom"], src["maxzoom"] = minzoom, maxzoom
-            src["attribution"] = "© OpenStreetMap contributors"
+            src["attribution"] = "© OpenMapTiles © OpenStreetMap contributors"
     if (settings.styles_dir / "fonts").is_dir():
         style["glyphs"] = f"{base}/styles/fonts/{{fontstack}}/{{range}}.pbf"
     else:

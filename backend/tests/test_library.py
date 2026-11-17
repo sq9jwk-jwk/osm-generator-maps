@@ -238,19 +238,60 @@ def test_sample_handler_leaves_map_untouched(monkeypatch):
         assert m["status"] == "ready" and m["profile"] == "classic"
 
 
-def test_label_styles_use_only_bundled_fonts_and_glyphs_are_served():
+def _all_strings(node):
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, list):
+        for x in node:
+            yield from _all_strings(x)
+    elif isinstance(node, dict):
+        for v in node.values():
+            yield from _all_strings(v)
+
+
+def test_every_style_is_self_contained_and_offline():
     s = get_settings()
-    fonts_dir = s.styles_dir / "fonts"
-    for style_id in ("classic", "tourist"):
-        doc = json.loads((s.styles_dir / style_id / "style.json").read_text(encoding="utf-8"))
-        used = {f for l in doc["layers"] if l["type"] == "symbol" for f in l["layout"]["text-font"]}
-        assert used, style_id
-        for font in used:
-            assert (fonts_dir / font / "0-255.pbf").is_file(), (style_id, font)
-            assert (fonts_dir / font / "256-511.pbf").is_file()  # Polish letters live here
+    profile_ids = {p.id for p in list_profiles(s)}
+    style_dirs = [d for d in s.styles_dir.iterdir() if (d / "style.json").is_file()]
+    assert {d.name for d in style_dirs} >= {"basic", "classic", "tourist", "bright", "positron", "darkmatter", "liberty"}
+    for d in style_dirs:
+        raw = (d / "style.json").read_text(encoding="utf-8")
+        doc = json.loads(raw)
+        # no external services: the app injects tiles, glyphs and sprite itself
+        assert "maptiler" not in raw and "github.io" not in raw, d.name
+        assert "glyphs" not in doc and "sprite" not in doc, d.name
+        assert {v["type"] for v in doc["sources"].values()} == {"vector"}, d.name
+        needed = set(doc.get("metadata", {}).get("osm-tilegen", {}).get("profiles", []))
+        assert needed <= profile_ids, (d.name, needed)
+        # fonts: every named font stack exists with Latin + Latin Extended-A (Polish letters)
+        for layer in doc["layers"]:
+            for font in _all_strings(layer.get("layout", {}).get("text-font", [])):
+                if " " in font:
+                    assert (s.styles_dir / "fonts" / font / "256-511.pbf").is_file(), (d.name, font)
+        uses_icons = any("icon-image" in l.get("layout", {}) for l in doc["layers"])
+        if uses_icons:
+            for suffix in (".json", ".png", "@2x.json", "@2x.png"):
+                assert (d / f"sprite{suffix}").is_file(), (d.name, suffix)
+        if (d / "sprite.json").exists():
+            assert (d / "LICENSE.md").is_file(), d.name  # third-party styles keep their license
+
+
+def test_full_profile_is_in_registry_and_has_no_missing_shapefiles():
+    full = get_profile(get_settings(), "full")
+    cfg = json.loads(full.config.read_text(encoding="utf-8"))
+    assert all("source" not in layer for layer in cfg["layers"].values())
+    assert {"poi", "housenumber", "aeroway", "water_name", "transportation_name"} <= set(cfg["layers"])
+
+
+def test_style_endpoint_injects_glyphs_sprite_and_attribution():
     with TestClient(app) as c:
         map_id = _map_with_files()
-        st = c.get(f"/api/maps/{map_id}/style/classic.json").json()
+        st = c.get(f"/api/maps/{map_id}/style/liberty.json").json()
         assert st["glyphs"].endswith("/styles/fonts/{fontstack}/{range}.pbf")
+        assert st["sprite"].endswith("/styles/liberty/sprite")
+        src = next(iter(st["sources"].values()))
+        assert "OpenMapTiles" in src["attribution"] and "OpenStreetMap" in src["attribution"]
+        assert c.get("/styles/liberty/sprite.json").status_code == 200
+        assert c.get("/styles/liberty/sprite@2x.png").status_code == 200
         r = c.get("/styles/fonts/Noto%20Sans%20Regular/256-511.pbf")
         assert r.status_code == 200 and len(r.content) > 1000

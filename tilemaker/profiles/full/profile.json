@@ -1,0 +1,4 @@
+{
+  "name": "Pełna (OpenMapTiles)",
+  "description": "Pełny schemat OpenMapTiles: POI, lotniska, numery domów, nazwy wód i wszystkie warstwy potrzebne stylom OSM Bright, Positron, Dark Matter i OSM Liberty. Import trwa dłużej i daje większy plik niż profil klasyczny. Bez mórz (poligony mórz jeszcze niedołączone)."
+}

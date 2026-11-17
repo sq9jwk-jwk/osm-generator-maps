@@ -296,8 +296,17 @@ osm-tilegen/
   statusu ani prawdziwego importu mapy. UI pokazuje ją z pasem „Importuj z tym profilem”.
 - Styl może wymagać profilu: `metadata["osm-tilegen"].profiles` w `style.json`
   (pusta lista = działa z każdym). UI pokazuje tylko style zgodne z profilem mapy.
-- Wciąż brak: fontów (glify PBF), więc brak etykiet w stylach; poligonów mórz; wielu
-  importów jednej mapy naraz (dziś jeden import na mapę, nowy zastępuje stary).
+- Profil `full` = niezmieniona kopia oficjalnego `process-openmaptiles.lua` z tilemakera
+  v3.0.0 (aktualizuj z upstreamu, nie edytuj ręcznie) + `config.json` bez warstw z
+  shapefile'ami (ocean, urban_areas, ice_shelf, glacier). Wymagają go style
+  `bright`, `positron`, `darkmatter`, `liberty` (pobrane z oficjalnych repozytoriów, licencje
+  w `styles/<id>/LICENSE.md`, opis zmian w `styles/README.md`). Atrybucja w podglądzie:
+  „© OpenMapTiles © OpenStreetMap contributors”.
+- Fonty: `styles/fonts/` (Noto Sans Regular/Bold/Italic, glify PBF, OFL). Style
+  trzecie mają fonty Metropolis/Roboto zamienione na Noto Sans.
+- Style `classic` (domyślny) i `tourist` mają etykiety; `basic` jest bez etykiet.
+- Wciąż brak: poligonów mórz (shapefile do tilemakera); wielu importów jednej mapy naraz
+  (dziś jeden import na mapę, nowy zastępuje stary). Profil `tourist` nie rozszerza `full`.
 
 **Następne kroki:**
 
