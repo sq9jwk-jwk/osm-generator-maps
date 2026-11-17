@@ -8,7 +8,13 @@ export interface MapInfo {
   status: "uploaded" | "importing" | "ready" | "failed";
   bbox: BBox | null;
   message: string | null;
+  created_at: number;
+  source_bytes: number;
+  import_bytes: number;
+  outputs: number;
 }
+
+export interface DeleteResult { ok: boolean; freed_bytes: number; removed_outputs: number; }
 
 export interface Job {
   id: string;
@@ -55,7 +61,13 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 
 export const api = {
   maps: () => req<MapInfo[]>("GET", "/api/maps"),
-  deleteMap: (id: string) => req("DELETE", `/api/maps/${id}`),
+  deleteMap: (id: string, opts: { importOnly?: boolean; outputs?: boolean } = {}) =>
+    req<DeleteResult>(
+      "DELETE",
+      `/api/maps/${id}?import_only=${!!opts.importOnly}&outputs=${!!opts.outputs}`,
+    ),
+  reimport: (id: string) => req<{ job_id: string }>("POST", `/api/maps/${id}/reimport`),
+  importLog: (id: string) => req<{ log: string }>("GET", `/api/maps/${id}/log`),
   coverage: (id: string) => req<Coverage>("GET", `/api/maps/${id}/coverage`),
   styles: () => req<StyleInfo[]>("GET", "/api/styles"),
   jobs: () => req<Job[]>("GET", "/api/jobs"),

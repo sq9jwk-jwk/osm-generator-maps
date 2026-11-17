@@ -37,13 +37,17 @@ def run_tilemaker(
         cmd, cwd=work_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
     assert proc.stdout is not None
+    tail: list[str] = []
     for line in proc.stdout:
         line = line.rstrip()
         if line:
             log(line)
+            tail = (tail + [line])[-5:]
         if should_cancel():
             proc.terminate()
             proc.wait(timeout=30)
             raise InterruptedError("cancelled")
     if proc.wait() != 0:
-        raise RuntimeError(f"tilemaker exited with code {proc.returncode}")
+        raise RuntimeError(
+            f"tilemaker exited with code {proc.returncode}: " + " | ".join(tail)
+        )

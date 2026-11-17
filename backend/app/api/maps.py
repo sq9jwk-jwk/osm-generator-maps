@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -29,11 +30,48 @@ def _get_map(map_id: str) -> dict[str, Any]:
 
 # ------------------------------------------------------------------ maps
 
+SOURCE_NAME = "source.osm.pbf"
+
+
+def _dir_size(path: Path) -> int:
+    if not path.is_dir():
+        return 0
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
+def _map_outputs(map_id: str) -> list[str]:
+    """Job ids of rendered outputs that came from this map."""
+    root = get_settings().output_dir
+    ids: list[str] = []
+    if not root.exists():
+        return ids
+    for d in root.iterdir():
+        meta = d / "metadata.json"
+        if not meta.exists():
+            continue
+        try:
+            if json.loads(meta.read_text(encoding="utf-8")).get("map_id") == map_id:
+                ids.append(d.name)
+        except (OSError, ValueError):
+            continue
+    return ids
+
+
+def _with_usage(m: dict[str, Any]) -> dict[str, Any]:
+    mdir = get_settings().maps_dir / m["id"]
+    source = mdir / SOURCE_NAME
+    source_bytes = source.stat().st_size if source.exists() else 0
+    m["source_bytes"] = source_bytes
+    m["import_bytes"] = max(_dir_size(mdir) - source_bytes, 0)
+    m["outputs"] = len(_map_outputs(m["id"]))
+    return m
+
+
 @router.get("/maps")
 def list_maps() -> list[dict[str, Any]]:
     with db.connect() as c:
         rows = c.execute("SELECT * FROM maps ORDER BY created_at DESC").fetchall()
-    return [db.row_to_dict(r) for r in rows]  # type: ignore[misc]
+    return [_with_usage(db.row_to_dict(r)) for r in rows]  # type: ignore[arg-type]
 
 
 @router.get("/maps/{map_id}")
@@ -58,19 +96,67 @@ def get_import_log(map_id: str) -> dict[str, str]:
     return {"log": text}
 
 
+def _ensure_idle(c: Any, map_id: str) -> None:
+    busy = c.execute(
+        "SELECT 1 FROM jobs WHERE map_id = ? AND status IN ('queued','running')", (map_id,)
+    ).fetchone()
+    if busy:
+        raise HTTPException(409, "Mapa ma aktywne zadania")
+
+
 @router.delete("/maps/{map_id}")
-def delete_map(map_id: str) -> dict[str, bool]:
+def delete_map(
+    map_id: str, import_only: bool = False, outputs: bool = False
+) -> dict[str, Any]:
+    """Delete a map.
+
+    ``import_only``: keep the source PBF, remove only imported data (vector
+    MBTiles, coverage, log); the map goes back to status ``uploaded``.
+    Otherwise the whole map directory (including the PBF) and saved selections
+    are removed. ``outputs`` additionally deletes rendered tiles from this map.
+    """
     _get_map(map_id)
+    settings = get_settings()
+    mdir = settings.maps_dir / map_id
+    freed = 0
     with db.connect() as c:
-        busy = c.execute(
-            "SELECT 1 FROM jobs WHERE map_id = ? AND status IN ('queued','running')", (map_id,)
-        ).fetchone()
-        if busy:
-            raise HTTPException(409, "Mapa ma aktywne zadania")
-        c.execute("DELETE FROM maps WHERE id = ?", (map_id,))
-        c.execute("DELETE FROM selections WHERE map_id = ?", (map_id,))
-    shutil.rmtree(get_settings().maps_dir / map_id, ignore_errors=True)
-    return {"ok": True}
+        _ensure_idle(c, map_id)
+        if import_only:
+            if mdir.is_dir():
+                for p in mdir.iterdir():
+                    if p.name == SOURCE_NAME:
+                        continue
+                    freed += _dir_size(p) if p.is_dir() else p.stat().st_size
+                    shutil.rmtree(p) if p.is_dir() else p.unlink()
+            c.execute(
+                "UPDATE maps SET status = 'uploaded', bbox = NULL, message = NULL WHERE id = ?",
+                (map_id,),
+            )
+        else:
+            freed += _dir_size(mdir)
+            c.execute("DELETE FROM maps WHERE id = ?", (map_id,))
+            c.execute("DELETE FROM selections WHERE map_id = ?", (map_id,))
+            c.execute("DELETE FROM jobs WHERE map_id = ?", (map_id,))
+    if not import_only:
+        shutil.rmtree(mdir, ignore_errors=True)
+    removed_outputs = 0
+    if outputs:
+        for job_id in _map_outputs(map_id):
+            freed += _dir_size(settings.output_dir / job_id)
+            shutil.rmtree(settings.output_dir / job_id, ignore_errors=True)
+            removed_outputs += 1
+    return {"ok": True, "freed_bytes": freed, "removed_outputs": removed_outputs}
+
+
+@router.post("/maps/{map_id}/reimport")
+def reimport_map(map_id: str) -> dict[str, str]:
+    m = _get_map(map_id)
+    if not (get_settings().maps_dir / map_id / SOURCE_NAME).exists():
+        raise HTTPException(409, "Brak pliku źródłowego")
+    with db.connect() as c:
+        _ensure_idle(c, map_id)
+        c.execute("UPDATE maps SET status = 'uploaded', message = NULL WHERE id = ?", (m["id"],))
+    return {"job_id": queue.enqueue("import", {}, map_id=map_id)}
 
 
 # ------------------------------------------------------------------ uploads

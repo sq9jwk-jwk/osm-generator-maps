@@ -73,6 +73,7 @@ async function refreshMaps() {
     });
     ul.appendChild(li);
   }
+  if (library.open) renderLibrary();
   // A map we are looking at may have just finished importing.
   if (current) {
     const fresh = maps.find((m) => m.id === current!.id);
@@ -115,6 +116,103 @@ async function loadStyles() {
   for (const s of await api.styles()) sel.add(new Option(s.name, s.id));
   sel.onchange = applyStyle;
 }
+
+// ------------------------------------------------------------------ library dialog
+
+const library = $<HTMLDialogElement>("library");
+
+function td(text: string | Node, cls?: string): HTMLTableCellElement {
+  const c = document.createElement("td");
+  if (cls) c.className = cls;
+  c.append(text);
+  return c;
+}
+
+function actionButton(label: string, onClick: () => void, danger = false): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.textContent = label;
+  if (danger) b.classList.add("danger");
+  b.onclick = onClick;
+  return b;
+}
+
+async function deleteMapFlow(m: MapInfo, importOnly: boolean) {
+  let withOutputs = false;
+  if (importOnly) {
+    if (!confirm(`Usunąć dane importu mapy „${m.name}” (${formatBytes(m.import_bytes)})?\n` +
+      `Plik PBF zostanie zachowany, import można uruchomić ponownie.`)) return;
+  } else {
+    if (!confirm(`Usunąć mapę „${m.name}” razem z plikiem PBF (${formatBytes(m.source_bytes)}) ` +
+      `i danymi importu (${formatBytes(m.import_bytes)})?`)) return;
+    if (m.outputs > 0)
+      withOutputs = confirm(`Mapa ma ${m.outputs} wygenerowanych wyników. ` +
+        `OK = usuń je też, Anuluj = zostaw wyniki na dysku.`);
+  }
+  try {
+    const r = await api.deleteMap(m.id, { importOnly, outputs: withOutputs });
+    toast(`Zwolniono ${formatBytes(r.freed_bytes)}`);
+    if (current?.id === m.id) await selectMap(null);
+    await refreshMaps();
+    await refreshOutputs();
+    renderLibrary();
+  } catch (e) { toast(String(e)); }
+}
+
+function renderLibrary() {
+  const body = $("library-table").querySelector("tbody")!;
+  body.innerHTML = "";
+  let total = 0;
+  for (const m of maps) {
+    total += m.source_bytes + m.import_bytes;
+    const tr = document.createElement("tr");
+    if (m.id === current?.id) tr.classList.add("active");
+    const badge = document.createElement("span");
+    badge.className = `badge ${m.status}`;
+    badge.textContent = m.status;
+    badge.title = m.message ?? "";
+    const area = m.bbox ? m.bbox.map((v) => v.toFixed(2)).join("  ") : "–";
+    const actions = document.createElement("td");
+    actions.className = "actions";
+    const busy = m.status === "importing";
+    actions.append(
+      actionButton("Wybierz", async () => { await selectMap(m.id); library.close(); }),
+      actionButton("Log", async () => {
+        const pre = $("library-log");
+        pre.textContent = (await api.importLog(m.id)).log || "(pusty log)";
+        pre.hidden = false;
+      }),
+    );
+    if (!busy) {
+      actions.append(
+        actionButton(m.status === "ready" ? "Importuj ponownie" : "Importuj", async () => {
+          try { await api.reimport(m.id); await refreshMaps(); renderLibrary(); } catch (e) { toast(String(e)); }
+        }),
+      );
+      if (m.import_bytes > 0)
+        actions.append(actionButton("Usuń dane importu", () => deleteMapFlow(m, true), true));
+      actions.append(actionButton("Usuń mapę", () => deleteMapFlow(m, false), true));
+    }
+    tr.append(
+      td(m.name),
+      td(new Date(m.created_at * 1000).toLocaleString("pl-PL")),
+      td(area),
+      td(badge),
+      td(formatBytes(m.source_bytes)),
+      td(formatBytes(m.import_bytes)),
+      td(String(m.outputs)),
+      actions,
+    );
+    body.appendChild(tr);
+  }
+  $("library-total").textContent = `Map: ${maps.length} · zajęte miejsce: ${formatBytes(total)}`;
+}
+
+$("open-library").addEventListener("click", async () => {
+  await refreshMaps();
+  $("library-log").hidden = true;
+  renderLibrary();
+  library.showModal();
+});
 
 $<HTMLInputElement>("file").addEventListener("change", async (ev) => {
   const input = ev.target as HTMLInputElement;

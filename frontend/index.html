@@ -17,6 +17,7 @@
         </label>
         <div id="upload-progress" class="muted"></div>
         <ul id="maps" class="list"></ul>
+        <button id="open-library">Zarządzaj mapami…</button>
       </section>
 
       <section id="sec-style" class="disabled">
@@ -83,6 +84,21 @@
       </section>
     </aside>
     <main id="map"></main>
+    <dialog id="library">
+      <form method="dialog" class="dlg-head">
+        <h2>Biblioteka map</h2>
+        <button>Zamknij</button>
+      </form>
+      <p id="library-total" class="muted"></p>
+      <table id="library-table">
+        <thead>
+          <tr><th>Nazwa</th><th>Wgrano</th><th>Obszar (W S E N)</th><th>Status</th>
+            <th>Plik PBF</th><th>Dane importu</th><th>Wyniki</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <pre id="library-log" hidden></pre>
+    </dialog>
     <div id="toast" hidden></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
