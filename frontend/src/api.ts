@@ -10,6 +10,7 @@ export interface MapInfo {
   message: string | null;
   profile: string;
   region: BBox | null;
+  regions: BBox[] | null;
   created_at: number;
   source_bytes: number;
   import_bytes: number;
@@ -89,8 +90,8 @@ export const api = {
   deletePart: (id: string, part: MapPart) =>
     req<{ freed_bytes: number }>("DELETE", `/api/maps/${id}/parts/${part}`),
   profiles: () => req<ProfileInfo[]>("GET", "/api/profiles"),
-  importMap: (id: string, profile: string, bbox: BBox | null) =>
-    req<{ job_id: string }>("POST", `/api/maps/${id}/import`, { profile, bbox }),
+  importMap: (id: string, profile: string, bbox: BBox | null, merge = false) =>
+    req<{ job_id: string }>("POST", `/api/maps/${id}/import`, { profile, bbox, merge }),
   createSample: (id: string, profile: string, bbox: BBox) =>
     req<{ job_id: string; bbox: BBox }>("POST", `/api/maps/${id}/sample`, { profile, bbox }),
   sampleInfo: (id: string) => req<SampleInfo>("GET", `/api/maps/${id}/sample`),

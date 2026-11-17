@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..core.config import Settings
+from . import regions
 
 
 def build_command(
@@ -76,17 +77,24 @@ def extract_region(
     settings: Settings,
     src: Path,
     dst: Path,
-    bbox: tuple[float, float, float, float],
+    bboxes: list[tuple[float, float, float, float]],
     work_dir: Path,
     log: Callable[[str], None],
     should_cancel: Callable[[], bool],
 ) -> None:
-    """Cut ``bbox`` (W,S,E,N) out of ``src``. ``smart`` keeps multipolygon and
+    """Cut one or more rectangles (W,S,E,N) out of ``src``. ``smart`` keeps multipolygon and
     route relations complete at the edge of the area."""
-    w, s, e, n = bbox
+    boxes = regions.merge_bboxes(bboxes)
+    if len(boxes) == 1:
+        w, s, e, n = boxes[0]
+        area = ["--bbox", f"{w},{s},{e},{n}"]
+    else:
+        poly = work_dir / "region.tmp.geojson"
+        regions.write_multipolygon(boxes, poly)
+        area = ["--polygon", str(poly)]
     cmd = [
         settings.osmium_bin, "extract",
-        "--bbox", f"{w},{s},{e},{n}",
+        *area,
         "--strategy", "smart",
         "--overwrite",
         "-o", str(dst),

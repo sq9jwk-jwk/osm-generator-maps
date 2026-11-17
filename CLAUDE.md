@@ -320,6 +320,10 @@ osm-tilegen/
   plikach `*.new` i po sukcesie poprzedni trafia do `imports/<id>/` (nic nie jest kasowane
   automatycznie; nieudany import zostawia aktywny bez zmian). Okno „Zarządzaj mapami…”
   pokazuje archiwa z akcjami „Użyj” (`POST /api/maps/{id}/imports/{imp}/activate`) i „Usuń”.
+- **Scalanie obszarów** (`importer/regions.py`): import z `merge=true` dodaje nowy prostokąt do
+  obszarów obecnego importu (ten sam profil). Mapa pamięta `regions` (lista prostokątów) i
+  `region` (obrys). `osmium extract` dostaje jeden `--bbox` albo `--polygon` (MultiPolygon z
+  rozłącznych prostokątów), a import przebudowuje całość; stary trafia do archiwum.
 - Wciąż brak: poligonów mórz (shapefile do tilemakera); równoległych importów jednej mapy (jeden aktywny). Profil `tourist` nie rozszerza `full`.
 
 **Następne kroki:**

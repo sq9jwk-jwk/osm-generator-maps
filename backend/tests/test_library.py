@@ -82,7 +82,7 @@ def test_import_with_profile_and_region_enqueues_job():
         assert job["kind"] == "import"
         with db.connect() as conn:
             params = json.loads(conn.execute("SELECT params FROM jobs WHERE id = ?", (job["id"],)).fetchone()[0])
-        assert params == {"profile": "tourist", "region": [19.0, 49.5, 19.5, 49.8]}
+        assert params == {"profile": "tourist", "regions": [[19.0, 49.5, 19.5, 49.8]]}
         # a second import while the first is queued is refused
         assert c.post(f"/api/maps/{map_id}/import", json={"profile": "classic"}).status_code == 409
 
@@ -198,7 +198,7 @@ def test_import_handler_limits_region_and_records_profile(monkeypatch):
             job = queue.claim_next()
         handlers.run_job(job)
 
-        assert calls == [("extract", tuple(region)), ("tilemaker", "region.tmp.osm.pbf", "tourist", "tourist")]
+        assert calls == [("extract", (tuple(region),)), ("tilemaker", "region.tmp.osm.pbf", "tourist", "tourist")]
         m = c.get(f"/api/maps/{map_id}").json()
         assert m["status"] == "ready" and m["profile"] == "tourist" and m["region"] == region
         # the temporary cut-out is removed after the import
@@ -334,3 +334,28 @@ def test_clear_finished_jobs_keeps_active_ones():
     assert client.delete("/api/jobs").json()["removed"] >= 1
     ids = {j["id"] for j in client.get("/api/jobs").json()}
     assert done not in ids and queued in ids
+
+
+def test_merge_bboxes_joins_overlapping_only():
+    from app.importer.regions import merge_bboxes, outline
+
+    a, b, far = (0, 0, 2, 2), (1, 1, 3, 3), (10, 10, 11, 11)
+    assert sorted(merge_bboxes([a, b, far])) == [(0, 0, 3, 3), (10, 10, 11, 11)]
+    assert outline([a, far]) == (0, 0, 11, 11)
+
+
+def test_import_merge_adds_area_to_current_import(monkeypatch):
+    map_id = _map_with_files()
+    with db.connect() as c:
+        c.execute(
+            "UPDATE maps SET profile='classic', region=?, regions=? WHERE id=?",
+            (json.dumps([18, 49, 19, 50]), json.dumps([[18, 49, 19, 50]]), map_id),
+        )
+    client = TestClient(app)
+    res = client.post(
+        f"/api/maps/{map_id}/import", json={"profile": "classic", "bbox": [20, 50, 21, 51], "merge": True}
+    )
+    assert res.status_code == 200
+    with db.connect() as c:
+        job = db.row_to_dict(c.execute("SELECT * FROM jobs WHERE id=?", (res.json()["job_id"],)).fetchone())
+    assert job["params"]["regions"] == [[18, 49, 19, 50], [20, 50, 21, 51]]

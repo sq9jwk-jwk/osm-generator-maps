@@ -35,8 +35,8 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def write_active_meta(mdir: Path, profile: str, region: Any, bbox: Any) -> None:
-    meta = {"profile": profile, "region": region, "bbox": bbox, "created_at": time.time()}
+def write_active_meta(mdir: Path, profile: str, region: Any, bbox: Any, areas: Any = None) -> None:
+    meta = {"profile": profile, "region": region, "regions": areas, "bbox": bbox, "created_at": time.time()}
     (mdir / ACTIVE_META).write_text(json.dumps(meta), encoding="utf-8")
 
 
@@ -49,6 +49,7 @@ def active_meta(mdir: Path, fallback: dict[str, Any]) -> dict[str, Any]:
     return {
         "profile": fallback.get("profile"),
         "region": fallback.get("region"),
+        "regions": fallback.get("regions") or ([fallback["region"]] if fallback.get("region") else None),
         "bbox": fallback.get("bbox"),
         "created_at": vector.stat().st_mtime if vector.exists() else time.time(),
     }

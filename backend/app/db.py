@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS maps (
     message     TEXT,
     created_at  REAL NOT NULL,
     profile     TEXT NOT NULL DEFAULT 'classic',
-    region      TEXT                    -- JSON [w,s,e,n] the import was limited to, or NULL
+    region      TEXT,                   -- JSON [w,s,e,n]: outline of the import area, or NULL
+    regions     TEXT                    -- JSON [[w,s,e,n],...]: rectangles the import covers
 );
 CREATE TABLE IF NOT EXISTS uploads (
     id          TEXT PRIMARY KEY,
@@ -86,13 +87,15 @@ def init_db() -> None:
             c.execute("ALTER TABLE maps ADD COLUMN profile TEXT NOT NULL DEFAULT 'classic'")
         if "region" not in cols:
             c.execute("ALTER TABLE maps ADD COLUMN region TEXT")
+        if "regions" not in cols:
+            c.execute("ALTER TABLE maps ADD COLUMN regions TEXT")
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
     d = dict(row)
-    for key in ("bbox", "params", "tiles", "region"):
+    for key in ("bbox", "params", "tiles", "region", "regions"):
         if key in d and isinstance(d[key], str):
             d[key] = json.loads(d[key])
     return d

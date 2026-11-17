@@ -11,7 +11,7 @@ from typing import Any
 
 from .. import db
 from ..core.config import get_settings
-from ..importer import archive
+from ..importer import archive, regions as regions_mod
 from ..importer.profiles import DEFAULT_PROFILE, get_profile
 from ..importer.tilemaker import extract_region, run_tilemaker
 from ..osm.analyze import coverage_from_mbtiles, read_bbox
@@ -40,10 +40,10 @@ def _tilemaker_with_profile(
     emit: Any,
     out: Path,
     profile_id: str,
-    region: list[float] | None,
+    areas: list[list[float]] | None,
     source: Path,
 ) -> None:
-    """(Optional) cut ``region`` out of ``source`` and run tilemaker with the profile into ``out``."""
+    """(Optional) cut ``areas`` (rectangles) out of ``source` and run tilemaker with the profile into ``out``."""
     settings = get_settings()
     if shutil.which(settings.tilemaker_bin) is None:
         raise RuntimeError("Brak programu tilemaker (apt install tilemaker)")
@@ -52,11 +52,11 @@ def _tilemaker_with_profile(
     pbf = source
     region_pbf = mdir / "region.tmp.osm.pbf"
     try:
-        if region:
+        if areas:
             if shutil.which(settings.osmium_bin) is None:
                 raise RuntimeError("Brak programu osmium (apt install osmium-tool)")
             queue.update(job["id"], progress=0.1, message="Wycinanie obszaru (osmium)")
-            extract_region(settings, source, region_pbf, tuple(region), mdir, emit, cancel)  # type: ignore[arg-type]
+            extract_region(settings, source, region_pbf, [tuple(a) for a in areas], mdir, emit, cancel)  # type: ignore[arg-type]
             pbf = region_pbf
         queue.update(
             job["id"], progress=0.3, message=f"Generowanie kafelków wektorowych (profil: {profile.name})"
@@ -69,6 +69,7 @@ def _tilemaker_with_profile(
         tmp.replace(out)
     finally:
         region_pbf.unlink(missing_ok=True)
+        (mdir / "region.tmp.geojson").unlink(missing_ok=True)
 
 
 def handle_import(job: dict[str, Any]) -> None:
@@ -77,7 +78,10 @@ def handle_import(job: dict[str, Any]) -> None:
     map_id = job["map_id"]
     params = job.get("params") or {}
     profile_id = params.get("profile", DEFAULT_PROFILE)
-    region = params.get("region")
+    areas = params.get("regions") or ([params["region"]] if params.get("region") else None)
+    if areas:
+        areas = [list(b) for b in regions_mod.merge_bboxes([tuple(a) for a in areas])]
+    region = list(regions_mod.outline([tuple(a) for a in areas])) if areas else None
     mdir = map_dir(map_id)
     pbf = mdir / "source.osm.pbf"
     out = mdir / "vector.new.mbtiles"
@@ -93,19 +97,22 @@ def handle_import(job: dict[str, Any]) -> None:
                 lf.write(line + "\n")
                 lf.flush()
 
-            emit(f"profile: {profile_id}, region: {region}")
+            emit(f"profile: {profile_id}, areas: {areas}")
             queue.update(job["id"], progress=0.05, message="Odczyt zasięgu pliku")
             if shutil.which(settings.osmium_bin) is None:
                 raise RuntimeError("Brak programu osmium (apt install osmium-tool)")
             bbox = read_bbox(pbf, settings.osmium_bin)
             emit(f"bbox: {bbox}")
 
-            _tilemaker_with_profile(job, mdir, emit, out, profile_id, region, pbf)
+            _tilemaker_with_profile(job, mdir, emit, out, profile_id, areas, pbf)
 
             queue.update(job["id"], progress=0.95, message="Maska pokrycia")
             tiles = coverage_from_mbtiles(out, settings.coverage_zoom)
-            if not tiles and (region or bbox):  # empty or unusual output -> fall back to bbox
-                tiles = list(xyz.bbox_to_tiles(tuple(region) if region else bbox, settings.coverage_zoom))
+            if not tiles and (areas or bbox):  # empty or unusual output -> fall back to bbox
+                tiles = sorted({
+                    t for box in (areas or [bbox])
+                    for t in xyz.bbox_to_tiles(tuple(box), settings.coverage_zoom)
+                })
             cov_new.write_text(
                 json.dumps({"zoom": settings.coverage_zoom, "tiles": tiles}), encoding="utf-8"
             )
@@ -120,7 +127,7 @@ def handle_import(job: dict[str, Any]) -> None:
     out.replace(mdir / archive.VECTOR)
     cov_new.replace(mdir / archive.COVERAGE)
     logfile.replace(mdir / archive.LOG)
-    archive.write_active_meta(mdir, profile_id, region, bbox)
+    archive.write_active_meta(mdir, profile_id, region, bbox, areas)
     _set_map(
         map_id,
         status="ready",
@@ -128,6 +135,7 @@ def handle_import(job: dict[str, Any]) -> None:
         bbox=json.dumps(bbox) if bbox else None,
         profile=profile_id,
         region=json.dumps(region) if region else None,
+        regions=json.dumps(areas) if areas else None,
     )
 
 
@@ -147,7 +155,7 @@ def handle_sample(job: dict[str, Any]) -> None:
             lf.flush()
 
         _tilemaker_with_profile(
-            job, mdir, emit, out, params["profile"], params["bbox"], mdir / "source.osm.pbf"
+            job, mdir, emit, out, params["profile"], [params["bbox"]], mdir / "source.osm.pbf"
         )
     (mdir / "sample.json").write_text(
         json.dumps({"profile": params["profile"], "bbox": params["bbox"]}), encoding="utf-8"

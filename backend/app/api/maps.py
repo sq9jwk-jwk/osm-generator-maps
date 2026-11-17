@@ -242,10 +242,11 @@ def activate_import(map_id: str, imp_id: str) -> dict[str, Any]:
             raise HTTPException(404, "Nie ma takiego importu") from exc
         c.execute(
             "UPDATE maps SET status = 'ready', message = NULL, profile = ?, region = ?,"
-            " bbox = COALESCE(?, bbox) WHERE id = ?",
+            " regions = ?, bbox = COALESCE(?, bbox) WHERE id = ?",
             (
                 meta.get("profile") or DEFAULT_PROFILE,
                 json.dumps(meta["region"]) if meta.get("region") else None,
+                json.dumps(meta["regions"]) if meta.get("regions") else None,
                 json.dumps(meta["bbox"]) if meta.get("bbox") else None,
                 map_id,
             ),
@@ -272,6 +273,8 @@ class ImportRequest(BaseModel):
     profile: str = DEFAULT_PROFILE
     # [west, south, east, north]; None = whole file
     bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    # add ``bbox`` to the areas the map's current import already covers (same profile)
+    merge: bool = False
 
 
 def _validated_bbox(bbox: list[float] | None, max_span: float | None = None) -> list[float] | None:
@@ -311,10 +314,20 @@ def import_map(map_id: str, body: ImportRequest) -> dict[str, str]:
         raise HTTPException(409, "Brak pliku źródłowego")
     _check_profile(body.profile)
     region = _validated_bbox(body.bbox)
+    areas = [region] if region else None
+    if body.merge:
+        m = _get_map(map_id)
+        current = m.get("regions") or ([m["region"]] if m.get("region") else None)
+        if region is None:
+            raise HTTPException(400, "Scalanie wymaga wskazania obszaru")
+        if m["status"] == "ready" and m.get("profile") == body.profile:
+            if current is None:
+                raise HTTPException(409, "Obecny import obejmuje już cały plik")
+            areas = [*current, region]
     with db.connect() as c:
         _ensure_idle(c, map_id)
         c.execute("UPDATE maps SET status = 'uploaded', message = NULL WHERE id = ?", (map_id,))
-    job_id = queue.enqueue("import", {"profile": body.profile, "region": region}, map_id=map_id)
+    job_id = queue.enqueue("import", {"profile": body.profile, "regions": areas}, map_id=map_id)
     return {"job_id": job_id}
 
 
@@ -322,9 +335,17 @@ def import_map(map_id: str, body: ImportRequest) -> dict[str, str]:
 def reimport_map(map_id: str) -> dict[str, str]:
     """Repeat the import with the profile and area the map already has."""
     m = _get_map(map_id)
-    return import_map(
-        map_id, ImportRequest(profile=m.get("profile") or DEFAULT_PROFILE, bbox=m.get("region"))
+    _check_profile(m.get("profile") or DEFAULT_PROFILE)
+    if not (get_settings().maps_dir / map_id / SOURCE_NAME).exists():
+        raise HTTPException(409, "Brak pliku źródłowego")
+    areas = m.get("regions") or ([m["region"]] if m.get("region") else None)
+    with db.connect() as c:
+        _ensure_idle(c, map_id)
+        c.execute("UPDATE maps SET status = 'uploaded', message = NULL WHERE id = ?", (map_id,))
+    job_id = queue.enqueue(
+        "import", {"profile": m.get("profile") or DEFAULT_PROFILE, "regions": areas}, map_id=map_id
     )
+    return {"job_id": job_id}
 
 
 # Largest side of a sample area in degrees (about 11 km at the equator).

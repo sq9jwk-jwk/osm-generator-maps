@@ -394,12 +394,16 @@ const setArea = (v: "all" | "rect") =>
 
 function updateImportUi() {
   $("import-profile-desc").textContent = profiles.find((p) => p.id === importProfile())?.description ?? "";
+  // Merging only makes sense into a partial import made with the same profile.
+  const canMerge = !!importTarget && importTarget.status === "ready" && !!importTarget.region &&
+    importTarget.profile === importProfile() && areaMode() === "rect";
+  $("import-merge-row").hidden = !canMerge;
   $("import-bbox").textContent = importRect ? importRect.map((v) => v.toFixed(3)).join("  ") : "";
 }
 
 async function openImportDialog(m: MapInfo) {
   importTarget = m;
-  importRect = m.region;
+  importRect = null;  // draw the new area; the existing one is merged with it when requested
   if (!profiles.length) {
     try { profiles = await api.profiles(); } catch (e) { return toast(String(e)); }
   }
@@ -407,7 +411,7 @@ async function openImportDialog(m: MapInfo) {
   sel.innerHTML = "";
   for (const p of profiles) sel.add(new Option(p.name, p.id));
   sel.value = profiles.some((p) => p.id === m.profile) ? m.profile : profiles[0]?.id ?? "";
-  setArea(importRect ? "rect" : "all");
+  setArea(m.region ? "rect" : "all");
   $("import-title").textContent = `Import: ${m.name}`;
   updateImportUi();
   library.close();
@@ -483,10 +487,12 @@ $("import-start").addEventListener("click", async () => {
   if (!rect && importProfile() !== "classic" && m.source_bytes > 300 * 1024 ** 2 &&
       !confirm(`Plik ma ${formatBytes(m.source_bytes)}. Ten profil dla całego pliku może trwać bardzo długo ` +
         `i zużyć dużo pamięci. Czy na pewno nie ograniczyć obszaru?\nOK = importuj cały plik mimo to.`)) return;
-  if (m.status === "ready" &&
+  const merge = areaMode() === "rect" && !$("import-merge-row").hidden &&
+    $<HTMLInputElement>("import-merge").checked;
+  if (m.status === "ready" && !merge &&
       !confirm("Nowy import stanie się aktywny, a obecny trafi do archiwum tej mapy (można go później przywrócić). Nic nie jest usuwane. Kontynuować?")) return;
   try {
-    await api.importMap(m.id, importProfile(), bbox);
+    await api.importMap(m.id, importProfile(), bbox, merge);
     importDlg.close();
     toast("Import dodany do kolejki");
     await refreshMaps();
