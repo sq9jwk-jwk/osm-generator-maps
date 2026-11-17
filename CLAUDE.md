@@ -315,8 +315,12 @@ osm-tilegen/
   nazwy rzek i jezior (`water_name`), numery domów (`housenumber`), wyspy, ogólne POI (stacje, szpitale,
   sklepy, gastronomia...) w funkcji `general_poi()` (**ta sama w obu `process.lua`, zmieniaj w obu**),
   granice admin. 5–8. Nie testowane z prawdziwym tilemakerem.
-- Wciąż brak: poligonów mórz (shapefile do tilemakera); wielu importów jednej mapy naraz
-  (dziś jeden import na mapę, nowy zastępuje stary). Profil `tourist` nie rozszerza `full`.
+- **Archiwum importów** (`importer/archive.py`): aktywny import leży w katalogu mapy
+  (`vector.mbtiles`, `coverage.json`, `import.log`, `import.json`). Nowy import powstaje w
+  plikach `*.new` i po sukcesie poprzedni trafia do `imports/<id>/` (nic nie jest kasowane
+  automatycznie; nieudany import zostawia aktywny bez zmian). Okno „Zarządzaj mapami…”
+  pokazuje archiwa z akcjami „Użyj” (`POST /api/maps/{id}/imports/{imp}/activate`) i „Usuń”.
+- Wciąż brak: poligonów mórz (shapefile do tilemakera); równoległych importów jednej mapy (jeden aktywny). Profil `tourist` nie rozszerza `full`.
 
 **Następne kroki:**
 

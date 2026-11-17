@@ -295,3 +295,42 @@ def test_style_endpoint_injects_glyphs_sprite_and_attribution():
         assert c.get("/styles/liberty/sprite@2x.png").status_code == 200
         r = c.get("/styles/fonts/Noto%20Sans%20Regular/256-511.pbf")
         assert r.status_code == 200 and len(r.content) > 1000
+
+
+def test_archived_import_is_kept_and_can_be_activated():
+    from app.importer import archive
+
+    map_id = _map_with_files()
+    mdir = get_settings().maps_dir / map_id
+    row = {"profile": "classic", "region": None, "bbox": [18.0, 49.0, 21.0, 51.0]}
+
+    imp_id = archive.archive_active(mdir, row)
+    assert imp_id and not (mdir / "vector.mbtiles").exists()
+    assert (mdir / "imports" / imp_id / "vector.mbtiles").exists()
+
+    client = TestClient(app)
+    contents = client.get(f"/api/maps/{map_id}/contents").json()
+    assert [i["id"] for i in contents["imports"]] == [imp_id]
+    assert contents["imports"][0]["profile"] == "classic"
+
+    assert client.post(f"/api/maps/{map_id}/imports/{imp_id}/activate").status_code == 200
+    assert (mdir / "vector.mbtiles").exists()
+    assert client.get(f"/api/maps/{map_id}/contents").json()["imports"] == []
+
+    # activating again archives the current one instead of deleting it
+    new_id = archive.archive_active(mdir, row)
+    assert client.delete(f"/api/maps/{map_id}/imports/{new_id}").status_code == 200
+    assert client.delete(f"/api/maps/{map_id}/imports/{new_id}").status_code == 404
+    assert client.post(f"/api/maps/{map_id}/imports/..%2f/activate").status_code in (404, 405)
+
+
+def test_clear_finished_jobs_keeps_active_ones():
+    db.init_db()
+    client = TestClient(app)
+    done = queue.enqueue("render", {})
+    queued = queue.enqueue("render", {})
+    queue.update(done, status="done")
+    assert client.delete(f"/api/jobs/{queued}").status_code == 409
+    assert client.delete("/api/jobs").json()["removed"] >= 1
+    ids = {j["id"] for j in client.get("/api/jobs").json()}
+    assert done not in ids and queued in ids

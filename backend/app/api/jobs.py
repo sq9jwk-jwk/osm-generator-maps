@@ -65,6 +65,29 @@ def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+FINISHED = ("done", "failed", "cancelled")
+
+
+@router.delete("")
+def clear_finished_jobs() -> dict[str, int]:
+    """Remove finished jobs from the history. Files on disk are not touched."""
+    with db.connect() as c:
+        cur = c.execute(f"DELETE FROM jobs WHERE status IN ({','.join('?' * len(FINISHED))})", FINISHED)
+    return {"removed": cur.rowcount}
+
+
+@router.delete("/{job_id}")
+def delete_job(job_id: str) -> dict[str, bool]:
+    with db.connect() as c:
+        row = c.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "Nie ma takiego zadania")
+        if row["status"] not in FINISHED:
+            raise HTTPException(409, "Zadanie jest aktywne, najpierw je anuluj")
+        c.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+    return {"ok": True}
+
+
 @router.get("/{job_id}")
 def get_job(job_id: str) -> dict[str, Any]:
     with db.connect() as c:

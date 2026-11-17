@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from .. import db
 from ..core.config import get_settings
+from ..importer import archive
 from ..importer.profiles import DEFAULT_PROFILE, get_profile, list_profiles
 from ..jobs import queue
 from ..osm.analyze import looks_like_pbf
@@ -92,7 +93,10 @@ def get_coverage(map_id: str) -> dict[str, Any]:
 @router.get("/maps/{map_id}/log")
 def get_import_log(map_id: str) -> dict[str, str]:
     _get_map(map_id)
-    path = get_settings().maps_dir / map_id / "import.log"
+    mdir = get_settings().maps_dir / map_id
+    path = mdir / "import.new.log"  # latest attempt (kept when it failed)
+    if not path.exists():
+        path = mdir / "import.log"
     text = path.read_text(encoding="utf-8")[-20000:] if path.exists() else ""
     return {"log": text}
 
@@ -111,8 +115,8 @@ def delete_map(
 ) -> dict[str, Any]:
     """Delete a map.
 
-    ``import_only``: keep the source PBF, remove only imported data (vector
-    MBTiles, coverage, log); the map goes back to status ``uploaded``.
+    ``import_only``: keep the source PBF and archived imports, remove only the active
+    import (vector MBTiles, coverage, log); the map goes back to status ``uploaded``.
     Otherwise the whole map directory (including the PBF) and saved selections
     are removed. ``outputs`` additionally deletes rendered tiles from this map.
     """
@@ -125,7 +129,7 @@ def delete_map(
         if import_only:
             if mdir.is_dir():
                 for p in mdir.iterdir():
-                    if p.name == SOURCE_NAME:
+                    if p.name in (SOURCE_NAME, archive.ARCHIVE_DIR):
                         continue
                     freed += _dir_size(p) if p.is_dir() else p.stat().st_size
                     shutil.rmtree(p) if p.is_dir() else p.unlink()
@@ -149,7 +153,7 @@ def delete_map(
     return {"ok": True, "freed_bytes": freed, "removed_outputs": removed_outputs}
 
 
-LOG_NAME = "import.log"
+LOG_NAMES = ("import.log", "import.new.log")
 PARTS = ("source", "import", "log")
 
 
@@ -160,9 +164,11 @@ def _part_paths(mdir: Path, part: str) -> list[Path]:
     if part == "source":
         return [mdir / SOURCE_NAME] if (mdir / SOURCE_NAME).exists() else []
     if part == "log":
-        return [mdir / LOG_NAME] if (mdir / LOG_NAME).exists() else []
-    # "import": vector tiles, coverage mask, tilemaker working files
-    return [p for p in mdir.iterdir() if p.name not in (SOURCE_NAME, LOG_NAME)]
+        return [mdir / n for n in LOG_NAMES if (mdir / n).exists()]
+    # "import": active vector tiles, coverage mask, tilemaker working files
+    # (archived imports are separate and are only removed one by one)
+    skip = (SOURCE_NAME, archive.ARCHIVE_DIR, *LOG_NAMES)
+    return [p for p in mdir.iterdir() if p.name not in skip]
 
 
 def _size(p: Path) -> int:
@@ -177,7 +183,7 @@ def map_contents(map_id: str) -> dict[str, Any]:
     mdir = settings.maps_dir / map_id
     labels = {
         "source": "Plik źródłowy .osm.pbf",
-        "import": "Dane importu (kafelki wektorowe, maska pokrycia)",
+        "import": "Aktywny import (kafelki wektorowe, maska pokrycia)",
         "log": "Log importu",
     }
     parts = []
@@ -197,7 +203,7 @@ def map_contents(map_id: str) -> dict[str, Any]:
         meta["size_bytes"] = _dir_size(d)
         outs.append(meta)
     outs.sort(key=lambda m: m.get("created_at", ""), reverse=True)
-    return {"parts": parts, "outputs": outs}
+    return {"parts": parts, "outputs": outs, "imports": archive.list_archives(mdir)}
 
 
 @router.delete("/maps/{map_id}/parts/{part}")
@@ -220,6 +226,45 @@ def delete_map_part(map_id: str, part: str) -> dict[str, Any]:
                 "UPDATE maps SET status = 'uploaded', bbox = NULL, message = NULL WHERE id = ?",
                 (map_id,),
             )
+    return {"ok": True, "freed_bytes": freed}
+
+
+@router.post("/maps/{map_id}/imports/{imp_id}/activate")
+def activate_import(map_id: str, imp_id: str) -> dict[str, Any]:
+    """Make an archived import the active one (the current one is archived, not deleted)."""
+    m = _get_map(map_id)
+    mdir = get_settings().maps_dir / map_id
+    with db.connect() as c:
+        _ensure_idle(c, map_id)
+        try:
+            meta = archive.activate(mdir, imp_id, m)
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(404, "Nie ma takiego importu") from exc
+        c.execute(
+            "UPDATE maps SET status = 'ready', message = NULL, profile = ?, region = ?,"
+            " bbox = COALESCE(?, bbox) WHERE id = ?",
+            (
+                meta.get("profile") or DEFAULT_PROFILE,
+                json.dumps(meta["region"]) if meta.get("region") else None,
+                json.dumps(meta["bbox"]) if meta.get("bbox") else None,
+                map_id,
+            ),
+        )
+    return {"ok": True}
+
+
+@router.delete("/maps/{map_id}/imports/{imp_id}")
+def delete_archived_import(map_id: str, imp_id: str) -> dict[str, Any]:
+    _get_map(map_id)
+    mdir = get_settings().maps_dir / map_id
+    with db.connect() as c:
+        _ensure_idle(c, map_id)
+        try:
+            path = archive.archive_path(mdir, imp_id)
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(404, "Nie ma takiego importu") from exc
+        freed = _dir_size(path)
+        shutil.rmtree(path, ignore_errors=True)
     return {"ok": True, "freed_bytes": freed}
 
 

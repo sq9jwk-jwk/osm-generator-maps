@@ -266,6 +266,34 @@ function detailRow(m: MapInfo): HTMLTableRowElement {
     if (!busy) btns.push(actionButton("Usuń", () => deletePartFlow(m, p.key, p.label, p.bytes), true));
     item(p.label, p.bytes, ...btns);
   }
+  for (const i of c.imports) {
+    const name = profiles.find((p) => p.id === i.profile)?.name ?? i.profile ?? "?";
+    const btns: HTMLButtonElement[] = [];
+    if (!busy) {
+      btns.push(actionButton("Użyj", async () => {
+        try {
+          await api.activateImport(m.id, i.id);
+          contents.delete(m.id);
+          await refreshMaps();
+          if (current?.id === m.id) await selectMap(m.id);
+          void loadContents(m.id);
+        } catch (e) { toast(String(e)); }
+      }));
+      btns.push(actionButton("Usuń", async () => {
+        if (!confirm(`Usunąć zarchiwizowany import (${name}, ${formatBytes(i.size_bytes)}) z dysku?`)) return;
+        try {
+          await api.deleteImport(m.id, i.id);
+          await afterDelete(m, i.size_bytes);
+        } catch (e) { toast(String(e)); }
+      }, true));
+    }
+    item(
+      `Zarchiwizowany import: ${name}${i.region ? " · wycinek" : " · cały plik"} · ` +
+        new Date(i.created_at * 1000).toLocaleString("pl-PL"),
+      i.size_bytes,
+      ...btns,
+    );
+  }
   for (const o of c.outputs)
     item(
       `Wynik: ${o.style} · z${o.min_zoom}${o.min_zoom !== o.max_zoom ? `–${o.max_zoom}` : ""} · ` +
@@ -274,12 +302,13 @@ function detailRow(m: MapInfo): HTMLTableRowElement {
       o.size_bytes,
       actionButton("Usuń", () => deleteOutputFlow(m, o), true),
     );
-  if (!c.parts.length && !c.outputs.length) {
+  if (!c.parts.length && !c.outputs.length && !c.imports.length) {
     const li = document.createElement("li");
     li.textContent = "Brak plików.";
     ul.append(li);
   }
-  const total = c.parts.reduce((a, p) => a + p.bytes, 0) + c.outputs.reduce((a, o) => a + o.size_bytes, 0);
+  const total = c.parts.reduce((a, p) => a + p.bytes, 0) + c.outputs.reduce((a, o) => a + o.size_bytes, 0) +
+    c.imports.reduce((a, i) => a + i.size_bytes, 0);
   const sum = document.createElement("p");
   sum.className = "muted";
   sum.textContent = `Razem: ${formatBytes(total)}`;
@@ -455,7 +484,7 @@ $("import-start").addEventListener("click", async () => {
       !confirm(`Plik ma ${formatBytes(m.source_bytes)}. Ten profil dla całego pliku może trwać bardzo długo ` +
         `i zużyć dużo pamięci. Czy na pewno nie ograniczyć obszaru?\nOK = importuj cały plik mimo to.`)) return;
   if (m.status === "ready" &&
-      !confirm("Import zastąpi obecne kafelki wektorowe tej mapy. Wygenerowane wyniki zostaną nietknięte. Kontynuować?")) return;
+      !confirm("Nowy import stanie się aktywny, a obecny trafi do archiwum tej mapy (można go później przywrócić). Nic nie jest usuwane. Kontynuować?")) return;
   try {
     await api.importMap(m.id, importProfile(), bbox);
     importDlg.close();
@@ -650,10 +679,23 @@ async function refreshJobs() {
       b.onclick = () => api.cancelJob(j.id).then(refreshJobs);
       li.appendChild(b);
     }
+    else {
+      const b = document.createElement("button");
+      b.textContent = "✕";
+      b.title = "Usuń z historii";
+      b.onclick = () => api.deleteJob(j.id).then(refreshJobs);
+      li.appendChild(b);
+    }
     ul.appendChild(li);
   }
+  $<HTMLButtonElement>("clear-jobs").hidden = !jobs.some(
+    (j) => j.status !== "running" && j.status !== "queued");
   if (jobs.some((j) => j.kind === "import")) refreshMaps();
 }
+
+$("clear-jobs").addEventListener("click", async () => {
+  try { await api.clearJobs(); await refreshJobs(); } catch (e) { toast(String(e)); }
+});
 
 async function refreshOutputs() {
   const outs = await api.outputs();

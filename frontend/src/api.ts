@@ -42,9 +42,18 @@ export interface OutputInfo {
 }
 
 export type MapPart = "source" | "import" | "log";
+export interface ArchivedImport {
+  id: string;
+  profile: string | null;
+  region: BBox | null;
+  bbox: BBox | null;
+  created_at: number;
+  size_bytes: number;
+}
 export interface MapContents {
   parts: { key: MapPart; label: string; bytes: number }[];
   outputs: OutputInfo[];
+  imports: ArchivedImport[];
 }
 
 export interface Coverage { zoom: number; tiles: [number, number][]; }
@@ -86,11 +95,17 @@ export const api = {
     req<{ job_id: string; bbox: BBox }>("POST", `/api/maps/${id}/sample`, { profile, bbox }),
   sampleInfo: (id: string) => req<SampleInfo>("GET", `/api/maps/${id}/sample`),
   deleteSample: (id: string) => req("DELETE", `/api/maps/${id}/sample`),
+  activateImport: (id: string, imp: string) =>
+    req("POST", `/api/maps/${id}/imports/${imp}/activate`),
+  deleteImport: (id: string, imp: string) =>
+    req<{ freed_bytes: number }>("DELETE", `/api/maps/${id}/imports/${imp}`),
   reimport: (id: string) => req<{ job_id: string }>("POST", `/api/maps/${id}/reimport`),
   importLog: (id: string) => req<{ log: string }>("GET", `/api/maps/${id}/log`),
   coverage: (id: string) => req<Coverage>("GET", `/api/maps/${id}/coverage`),
   styles: () => req<StyleInfo[]>("GET", "/api/styles"),
   jobs: () => req<Job[]>("GET", "/api/jobs"),
+  deleteJob: (id: string) => req("DELETE", `/api/jobs/${id}`),
+  clearJobs: () => req<{ removed: number }>("DELETE", "/api/jobs"),
   cancelJob: (id: string) => req("POST", `/api/jobs/${id}/cancel`),
   outputs: () => req<OutputInfo[]>("GET", "/api/outputs"),
   deleteOutput: (id: string) => req("DELETE", `/api/outputs/${id}`),
