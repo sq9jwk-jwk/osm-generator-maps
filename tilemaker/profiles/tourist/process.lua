@@ -4,7 +4,54 @@
 -- No sea polygons yet (they need a coastline shapefile, see CLAUDE.md).
 
 -- @NODE_KEYS@
-node_keys = { "place", "natural", "tourism" }
+node_keys = { "place", "natural", "tourism", "amenity", "historic", "man_made", "tower:type",
+              "mountain_pass", "waterway", "information", "shelter", "access", "shop",
+              "railway", "aeroway", "highway", "addr:housenumber" }
+
+-- General-purpose POIs (OSM Carto-like). Returns class, minzoom, needs_name.
+-- Data tiles stop at z14, so everything has minzoom <= 14 (labels overzoom).
+function general_poi(name)
+  local amenity = Find("amenity")
+  local shop = Find("shop")
+  local tourism = Find("tourism")
+  local railway = Find("railway")
+  if railway == "station" or railway == "halt" then
+    if Find("subway") == "yes" or Find("light_rail") == "yes" then return "station", 13, true end
+    return "station", 11, true
+  end
+  if railway == "tram_stop" then return "tram_stop", 14, true end
+  if Find("highway") == "bus_stop" then return "bus_stop", 14, false end
+  if Find("aeroway") == "aerodrome" then return "airport", 9, true end
+  if amenity == "hospital" then return "hospital", 13, true end
+  if amenity == "clinic" or amenity == "doctors" or amenity == "dentist" then return "clinic", 14, true end
+  if amenity == "pharmacy" then return "pharmacy", 14, false end
+  if amenity == "school" or amenity == "kindergarten" or amenity == "college" or amenity == "university" then
+    return "school", 14, true
+  end
+  if amenity == "police" then return "police", 14, false end
+  if amenity == "fire_station" then return "fire_station", 14, false end
+  if amenity == "post_office" then return "post", 14, false end
+  if amenity == "bank" then return "bank", 14, true end
+  if amenity == "fuel" then return "fuel", 14, false end
+  if amenity == "restaurant" or amenity == "fast_food" or amenity == "cafe" or amenity == "pub"
+      or amenity == "bar" or amenity == "biergarten" then
+    return "food", 14, true
+  end
+  if amenity == "place_of_worship" then return "worship", 14, true end
+  if amenity == "townhall" or amenity == "library" or amenity == "theatre" or amenity == "cinema" then
+    return "civic", 14, true
+  end
+  if shop == "supermarket" or shop == "mall" or shop == "department_store" then return "shop", 13, true end
+  if shop ~= "" and shop ~= "vacant" then return "shop", 14, true end
+  if tourism == "hotel" or tourism == "guest_house" or tourism == "hostel" or tourism == "motel" then
+    return "lodging", 14, true
+  end
+  if tourism == "museum" or tourism == "gallery" or tourism == "zoo" or tourism == "theme_park"
+      or tourism == "attraction" then
+    return "attraction", 14, true
+  end
+  return nil
+end
 
 function init_function() end
 function exit_function() end
@@ -19,6 +66,8 @@ function node_function()
     elseif place == "town" then minz = 7
     elseif place == "village" then minz = 10
     elseif place == "suburb" or place == "hamlet" or place == "neighbourhood" then minz = 12
+    elseif place == "island" then minz = 8
+    elseif place == "islet" or place == "isolated_dwelling" or place == "farm" or place == "locality" then minz = 13
     end
     if minz then
       Layer("place", false)
@@ -29,17 +78,69 @@ function node_function()
   end
   local natural = Find("natural")
   local tourism = Find("tourism")
+  local amenity = Find("amenity")
+  local historic = Find("historic")
+  local man_made = Find("man_made")
+  local waterway = Find("waterway")
   if natural == "peak" and name ~= "" then
     Layer("mountain_peak", false)
     Attribute("name", name)
     local ele = tonumber(Find("ele"))
     if ele then AttributeNumeric("ele", ele) end
     MinZoom(10)
-  elseif (tourism == "alpine_hut" or tourism == "wilderness_hut") and name ~= "" then
+    return
+  end
+
+  -- Tourist points of interest: class drives the icon, name is optional
+  -- except for huts (unnamed huts are noise) and big POIs.
+  local class, minz, needs_name
+  if tourism == "alpine_hut" or tourism == "wilderness_hut" then
+    class, minz, needs_name = "hut", 11, true
+  elseif amenity == "shelter" or tourism == "picnic_site" and Find("shelter") == "yes" then
+    class, minz = "shelter", 13
+  elseif tourism == "viewpoint" then
+    class, minz = "viewpoint", 12
+  elseif man_made == "tower" and Find("tower:type") == "observation" then
+    class, minz = "viewpoint", 12
+  elseif natural == "spring" then
+    class, minz = "spring", 13
+  elseif amenity == "drinking_water" then
+    class, minz = "water", 13
+  elseif natural == "saddle" or Find("mountain_pass") == "yes" then
+    class, minz, needs_name = "saddle", 11, true
+  elseif tourism == "camp_site" or tourism == "caravan_site" then
+    class, minz = "camp", 12
+  elseif amenity == "parking" and Find("access") ~= "private" then
+    class, minz = "parking", 14
+  elseif tourism == "information" then
+    local info = Find("information")
+    if info == "board" or info == "map" or info == "guidepost" or info == "office" then
+      class, minz = "info", 14
+    end
+  elseif historic == "castle" or historic == "ruins" or historic == "fort" then
+    class, minz, needs_name = "castle", 12, true
+  elseif historic == "wayside_cross" or historic == "wayside_shrine"
+      or historic == "memorial" or historic == "monument" then
+    class, minz = "shrine", 14
+  elseif natural == "cave_entrance" then
+    class, minz = "cave", 13
+  elseif waterway == "waterfall" then
+    class, minz = "waterfall", 12
+  end
+  if not class then class, minz, needs_name = general_poi(name) end
+  if class and (not needs_name or name ~= "") then
     Layer("poi", false)
-    Attribute("class", "hut")
+    Attribute("class", class)
     Attribute("name", name)
-    MinZoom(11)
+    local ele = tonumber(Find("ele"))
+    if ele then AttributeNumeric("ele", ele) end
+    MinZoom(minz)
+  end
+  local hn = Find("addr:housenumber")
+  if hn ~= "" then
+    Layer("housenumber", false)
+    Attribute("housenumber", hn)
+    MinZoom(14)
   end
 end
 
@@ -55,6 +156,10 @@ function way_function()
   local admin = Find("admin_level")
   local building = Find("building")
   local isClosed = IsClosed()
+  local amenity = Find("amenity")
+  local aeroway = Find("aeroway")
+  local route = Find("route")
+  local wname = Find("name")
 
   -- Roads
   if highway ~= "" then
@@ -80,8 +185,12 @@ function way_function()
       Layer("transportation", false)
       Attribute("class", class)
       Attribute("subclass", highway)
+      local bridge, tunnel = Find("bridge"), Find("tunnel")
+      if bridge ~= "" and bridge ~= "no" then Attribute("brunnel", "bridge")
+      elseif tunnel ~= "" and tunnel ~= "no" then Attribute("brunnel", "tunnel") end
       Attribute("sac_scale", Find("sac_scale"))
       Attribute("surface", Find("surface"))
+      Attribute("trail_visibility", Find("trail_visibility"))
       MinZoom(minz)
 
       local name = Find("name")
@@ -93,16 +202,33 @@ function way_function()
         MinZoom(math.max(minz, 12))
       end
     end
-  elseif railway == "rail" then
+  elseif railway == "rail" or railway == "light_rail" or railway == "tram"
+      or railway == "subway" or railway == "narrow_gauge" then
     Layer("transportation", false)
     Attribute("class", "rail")
-    MinZoom(8)
+    Attribute("subclass", railway)
+    if railway == "rail" then
+      if Find("service") ~= "" then MinZoom(13) else MinZoom(8) end
+    elseif railway == "narrow_gauge" then MinZoom(11)
+    else MinZoom(12) end
+    local rtunnel = Find("tunnel")
+    if (rtunnel ~= "" and rtunnel ~= "no") or railway == "subway" then Attribute("brunnel", "tunnel") end
+  elseif route == "ferry" then
+    Layer("transportation", false)
+    Attribute("class", "ferry")
+    MinZoom(9)
+  elseif aeroway == "runway" or aeroway == "taxiway" then
+    Layer("transportation", false)
+    Attribute("class", "aeroway")
+    Attribute("subclass", aeroway)
+    MinZoom(aeroway == "runway" and 10 or 12)
   end
 
   -- Waterways
   if waterway == "river" or waterway == "canal" or waterway == "stream" then
     Layer("waterway", false)
     Attribute("class", waterway)
+    Attribute("name", wname)
     if waterway == "stream" then MinZoom(12) end
   end
 
@@ -110,6 +236,12 @@ function way_function()
   if isClosed and (natural == "water" or landuse == "reservoir" or landuse == "basin" or water ~= "") then
     Layer("water", true)
     Attribute("class", "lake")
+    local wtype = Find("water")
+    if wname ~= "" and natural == "water" and wtype ~= "basin" and wtype ~= "wastewater" then
+      LayerAsCentroid("water_name")
+      Attribute("name", wname)
+      MinZoom(12)
+    end
   end
 
   -- Landcover
@@ -118,6 +250,12 @@ function way_function()
     if natural == "wood" or landuse == "forest" then lc = "wood"
     elseif landuse == "grass" or landuse == "meadow" or natural == "grassland" then lc = "grass"
     elseif landuse == "farmland" or landuse == "orchard" or landuse == "vineyard" then lc = "farmland"
+    elseif natural == "bare_rock" then lc = "rock"
+    elseif natural == "scree" or natural == "shingle" then lc = "scree"
+    elseif natural == "heath" or natural == "scrub" then lc = "scrub"
+    elseif natural == "wetland" then lc = "wetland"
+    elseif natural == "glacier" then lc = "glacier"
+    elseif natural == "sand" or natural == "beach" then lc = "sand"
     end
     if lc then
       Layer("landcover", true)
@@ -128,7 +266,21 @@ function way_function()
     if landuse == "residential" then lu = "residential"
     elseif landuse == "commercial" or landuse == "retail" then lu = "commercial"
     elseif landuse == "industrial" then lu = "industrial"
-    elseif landuse == "cemetery" then lu = "cemetery"
+    elseif landuse == "cemetery" or amenity == "grave_yard" then lu = "cemetery"
+    elseif landuse == "military" then lu = "military"
+    elseif landuse == "quarry" then lu = "quarry"
+    elseif landuse == "allotments" then lu = "allotments"
+    elseif landuse == "recreation_ground" or leisure == "recreation_ground" or leisure == "playground"
+        or landuse == "village_green" then lu = "recreation"
+    elseif landuse == "construction" or landuse == "brownfield" then lu = "construction"
+    elseif landuse == "railway" then lu = "railway"
+    elseif amenity == "school" or amenity == "kindergarten" or amenity == "college" or amenity == "university" then
+      lu = "education"
+    elseif amenity == "hospital" then lu = "hospital"
+    elseif amenity == "parking" then lu = "parking"
+    elseif leisure == "pitch" or leisure == "sports_centre" or leisure == "stadium" or leisure == "track"
+        or leisure == "golf_course" then lu = "sports"
+    elseif aeroway == "aerodrome" then lu = "airport"
     end
     if lu then
       Layer("landuse", true)
@@ -144,6 +296,21 @@ function way_function()
     if building ~= "" then
       Layer("building", true)
       MinZoom(13)
+      local hn = Find("addr:housenumber")
+      if hn ~= "" then
+        LayerAsCentroid("housenumber")
+        Attribute("housenumber", hn)
+        MinZoom(14)
+      end
+    end
+
+    -- POIs mapped as areas (hospitals, schools, stations, shops ...)
+    local pclass, pminz, pneeds = general_poi(wname)
+    if pclass and pclass ~= "bus_stop" and pclass ~= "tram_stop" and (not pneeds or wname ~= "") then
+      LayerAsCentroid("poi")
+      Attribute("class", pclass)
+      Attribute("name", wname)
+      MinZoom(pminz)
     end
   end
 

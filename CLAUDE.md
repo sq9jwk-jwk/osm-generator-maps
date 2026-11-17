@@ -305,6 +305,16 @@ osm-tilegen/
 - Fonty: `styles/fonts/` (Noto Sans Regular/Bold/Italic, glify PBF, OFL). Style
   trzecie mają fonty Metropolis/Roboto zamienione na Noto Sans.
 - Style `classic` (domyślny) i `tourist` mają etykiety; `basic` jest bez etykiet.
+- Profil `tourist` (rozszerzony wg legend OpenTopoMap/OpenHikingMap): POI w warstwie `poi`
+  (klasy hut, shelter, viewpoint, spring, water, saddle, camp, parking, info, castle, shrine,
+  cave, waterfall), landcover rock/scree/scrub/wetland/glacier/sand, ścieżki wg `sac_scale`,
+  obrys obszarów chronionych. Nie przetestowane z prawdziwym tilemakerem (brak go na Windows).
+  Brak: warstnic i cieniowania (wymagają DEM/SRTM, OSM ich nie zawiera).
+- `classic` i `tourist` (porównanie z OSM Carto): obwódki dróg, mosty/tunele (`brunnel`), tramwaje/metro/kolej
+  wąskotorowa, promy, pasy startowe, więcej `landuse` (cmentarze, przemysł, szkoły, boiska, lotniska...),
+  nazwy rzek i jezior (`water_name`), numery domów (`housenumber`), wyspy, ogólne POI (stacje, szpitale,
+  sklepy, gastronomia...) w funkcji `general_poi()` (**ta sama w obu `process.lua`, zmieniaj w obu**),
+  granice admin. 5–8. Nie testowane z prawdziwym tilemakerem.
 - Wciąż brak: poligonów mórz (shapefile do tilemakera); wielu importów jednej mapy naraz
   (dziś jeden import na mapę, nowy zastępuje stary). Profil `tourist` nie rozszerza `full`.
 
