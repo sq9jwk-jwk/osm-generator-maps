@@ -1,0 +1,14 @@
+Package: osm-tilegen
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: osm-tilegen <root@localhost>
+Section: utils
+Priority: optional
+Depends: python3 (>= 3.11), python3-fastapi, python3-uvicorn, python3-pil,
+ osmium-tool, tilemaker, adduser
+Recommends: xvfb
+Description: Offline OSM raster tile generator with a web UI
+ Upload .osm.pbf files, preview them in several map styles, select an area
+ on the XYZ tile grid and render PNG/JPG tiles (z/x/y) for offline maps on
+ SD cards and disks. Runs as a background systemd service, no internet
+ access required.

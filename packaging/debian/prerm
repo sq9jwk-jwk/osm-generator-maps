@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+if [ "$1" = "remove" ] || [ "$1" = "upgrade" ]; then
+    systemctl stop osm-tilegen.service osm-tilegen-worker.service || true
+fi
+if [ "$1" = "remove" ]; then
+    systemctl disable osm-tilegen.service osm-tilegen-worker.service || true
+fi
+exit 0

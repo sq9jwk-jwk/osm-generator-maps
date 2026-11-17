@@ -1,0 +1,32 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; font: 14px/1.4 system-ui, sans-serif; color: #222; }
+body { display: flex; }
+#panel { width: 360px; overflow-y: auto; padding: 12px 14px; background: #fafafa; border-right: 1px solid #ddd; }
+#map { flex: 1; position: relative; }
+h1 { font-size: 18px; margin: 0 0 8px; }
+h2 { font-size: 14px; margin: 14px 0 6px; }
+section.disabled { opacity: .45; pointer-events: none; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; align-items: center; }
+label { display: inline-flex; gap: 4px; align-items: center; }
+input[type=number] { width: 60px; }
+select, input, button { font: inherit; }
+button { padding: 4px 10px; cursor: pointer; }
+button.primary { width: 100%; margin-top: 8px; padding: 8px; background: #2563eb; color: #fff; border: 0; border-radius: 4px; }
+button.primary:disabled { background: #9ca3af; cursor: default; }
+.file input { display: none; }
+.file span { display: inline-block; padding: 6px 10px; border: 1px dashed #888; border-radius: 4px; cursor: pointer; }
+.list { list-style: none; margin: 0; padding: 0; }
+.list li { padding: 6px; border-bottom: 1px solid #eee; display: flex; gap: 6px; align-items: center; justify-content: space-between; }
+.list li.active { background: #e0ecff; }
+.list li .name { cursor: pointer; flex: 1; }
+.muted, .hint { color: #666; font-size: 12px; }
+.stats { background: #fff; border: 1px solid #ddd; padding: 6px; border-radius: 4px; margin-top: 6px; }
+progress { width: 100px; }
+.badge { font-size: 11px; padding: 1px 6px; border-radius: 8px; background: #eee; }
+.badge.ready, .badge.done { background: #c8f0c8; }
+.badge.failed { background: #f8c8c8; }
+.badge.importing, .badge.running { background: #fff0b0; }
+#toast { position: fixed; bottom: 16px; right: 16px; background: #333; color: #fff; padding: 8px 12px; border-radius: 4px; max-width: 420px; }
+.dragbox { position: absolute; border: 2px dashed #2563eb; background: rgba(37, 99, 235, .1); pointer-events: none; }
+.dragbox.remove { border-color: #dc2626; background: rgba(220, 38, 38, .1); }
+[hidden] { display: none !important; }

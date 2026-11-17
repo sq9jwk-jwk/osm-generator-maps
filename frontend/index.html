@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>osm-tilegen</title>
+  </head>
+  <body>
+    <aside id="panel">
+      <h1>osm-tilegen</h1>
+
+      <section>
+        <h2>1. Mapy</h2>
+        <label class="file">
+          <input id="file" type="file" accept=".pbf" />
+          <span>Wgraj plik .osm.pbf</span>
+        </label>
+        <div id="upload-progress" class="muted"></div>
+        <ul id="maps" class="list"></ul>
+      </section>
+
+      <section id="sec-style" class="disabled">
+        <h2>2. Styl podglądu</h2>
+        <select id="style"></select>
+      </section>
+
+      <section id="sec-output" class="disabled">
+        <h2>3. Parametry wyjścia</h2>
+        <div class="row">
+          <label>Zoom wyjściowy <input id="max-zoom" type="number" min="0" max="20" value="14" /></label>
+          <label><input id="use-range" type="checkbox" /> zakres od
+            <input id="min-zoom" type="number" min="0" max="20" value="10" disabled /></label>
+        </div>
+        <div class="row">
+          <label>Kafelek
+            <select id="tile-px">
+              <option value="128">128 px</option>
+              <option value="256" selected>256 px</option>
+              <option value="512">512 px</option>
+            </select>
+          </label>
+          <label>Format
+            <select id="format">
+              <option value="png" selected>PNG</option>
+              <option value="png8">PNG 8-bit</option>
+              <option value="jpg">JPG</option>
+            </select>
+          </label>
+          <label id="quality-wrap" hidden>Jakość <input id="quality" type="number" min="10" max="100" value="85" /></label>
+        </div>
+        <div class="row">
+          <label>Numeracja
+            <select id="scheme">
+              <option value="xyz" selected>XYZ (standard)</option>
+              <option value="tms">TMS (odwrócone Y)</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section id="sec-select" class="disabled">
+        <h2>4. Zaznaczanie obszaru</h2>
+        <label>Siatka zaznaczania (zoom) <input id="grid-zoom" type="range" min="4" max="14" value="10" />
+          <b id="grid-zoom-val">10</b></label>
+        <p class="hint">Klik: zaznacz/odznacz kwadrat · Shift + przeciągnij: zaznacz prostokąt ·
+          Alt + przeciągnij: odznacz prostokąt</p>
+        <div class="row">
+          <button id="sel-all">Zaznacz cały obszar mapy</button>
+          <button id="sel-clear">Wyczyść</button>
+        </div>
+        <div id="stats" class="stats"></div>
+        <button id="generate" class="primary">Generuj kafelki</button>
+      </section>
+
+      <section>
+        <h2>Zadania</h2>
+        <ul id="jobs" class="list"></ul>
+      </section>
+
+      <section>
+        <h2>Wyniki</h2>
+        <ul id="outputs" class="list"></ul>
+      </section>
+    </aside>
+    <main id="map"></main>
+    <div id="toast" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

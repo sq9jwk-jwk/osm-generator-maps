@@ -1,0 +1,26 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "API (uvicorn :8080)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--reload", "--port", "8080"],
+      "cwd": "${workspaceFolder}/backend",
+      "env": { "OSMTILE_CONFIG": "${workspaceFolder}/packaging/config.dev.toml" },
+      "justMyCode": true
+    },
+    {
+      "name": "Worker",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "app.jobs.worker",
+      "cwd": "${workspaceFolder}/backend",
+      "env": { "OSMTILE_CONFIG": "${workspaceFolder}/packaging/config.dev.toml" }
+    }
+  ],
+  "compounds": [
+    { "name": "API + Worker", "configurations": ["API (uvicorn :8080)", "Worker"] }
+  ]
+}

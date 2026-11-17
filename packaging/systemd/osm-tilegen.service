@@ -1,0 +1,22 @@
+[Unit]
+Description=osm-tilegen web UI and API
+After=network.target
+
+[Service]
+Type=simple
+User=osmtile
+Group=osmtile
+Environment=OSMTILE_CONFIG=/etc/osm-tilegen/config.toml
+Environment=PYTHONPATH=/usr/lib/osm-tilegen
+WorkingDirectory=/usr/lib/osm-tilegen
+ExecStart=/usr/bin/python3 -m app
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/osm-tilegen
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

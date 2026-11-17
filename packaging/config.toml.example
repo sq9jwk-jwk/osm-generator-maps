@@ -1,0 +1,25 @@
+# /etc/osm-tilegen/config.toml
+
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[paths]
+data_dir      = "/var/lib/osm-tilegen"
+styles_dir    = "/usr/share/osm-tilegen/styles"
+frontend_dist = "/usr/share/osm-tilegen/ui"
+
+[import]
+tilemaker_bin = "tilemaker"
+osmium_bin    = "osmium"
+# Without these tilemaker uses its bundled OpenMapTiles config:
+# tilemaker_config  = "/usr/share/osm-tilegen/tilemaker/config-openmaptiles.json"
+# tilemaker_process = "/usr/share/osm-tilegen/tilemaker/process-openmaptiles.lua"
+# Low-RAM machines (Raspberry Pi): keep tilemaker's working data on disk.
+store_on_disk = false
+coverage_zoom = 10
+
+[render]
+# "debug" draws z/x/y test tiles; "maplibre" = real rendering (after spike M0.5)
+engine  = "debug"
+threads = 0   # 0 = all CPU cores

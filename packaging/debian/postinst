@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    if ! getent passwd osmtile >/dev/null; then
+        adduser --system --group --home /var/lib/osm-tilegen --no-create-home osmtile
+    fi
+    install -d -o osmtile -g osmtile -m 0750 /var/lib/osm-tilegen \
+        /var/lib/osm-tilegen/uploads /var/lib/osm-tilegen/maps /var/lib/osm-tilegen/output
+    if [ ! -f /etc/osm-tilegen/config.toml ]; then
+        install -D -m 0644 /usr/share/osm-tilegen/config.toml.example /etc/osm-tilegen/config.toml
+    fi
+    systemctl daemon-reload || true
+    systemctl enable --now osm-tilegen.service osm-tilegen-worker.service || true
+fi
+
+exit 0

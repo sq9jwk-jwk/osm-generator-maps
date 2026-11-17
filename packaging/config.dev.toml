@@ -1,0 +1,9 @@
+# Development config (used by the Makefile). Data goes to ./var in the repo.
+[server]
+port = 8080
+
+[import]
+store_on_disk = false
+
+[render]
+engine = "debug"

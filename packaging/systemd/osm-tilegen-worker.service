@@ -1,0 +1,28 @@
+[Unit]
+Description=osm-tilegen background worker (import and render)
+After=network.target
+
+[Service]
+Type=simple
+User=osmtile
+Group=osmtile
+Environment=OSMTILE_CONFIG=/etc/osm-tilegen/config.toml
+Environment=PYTHONPATH=/usr/lib/osm-tilegen
+WorkingDirectory=/usr/lib/osm-tilegen
+ExecStart=/usr/bin/python3 -m app.jobs.worker
+Restart=on-failure
+RestartSec=5
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# Adjust for the machine (e.g. 3G on a 4 GB Raspberry Pi).
+MemoryMax=80%
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/osm-tilegen
+PrivateTmp=true
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

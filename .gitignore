@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+frontend/node_modules/
+frontend/dist/
+var/
+build/
+scripts/testdata/
+*.osm.pbf
+*.mbtiles
