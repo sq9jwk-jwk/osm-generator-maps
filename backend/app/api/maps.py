@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from .. import db
 from ..core.config import get_settings
+from ..importer.profiles import DEFAULT_PROFILE, get_profile, list_profiles
 from ..jobs import queue
 from ..osm.analyze import looks_like_pbf
 
@@ -148,15 +149,182 @@ def delete_map(
     return {"ok": True, "freed_bytes": freed, "removed_outputs": removed_outputs}
 
 
-@router.post("/maps/{map_id}/reimport")
-def reimport_map(map_id: str) -> dict[str, str]:
-    m = _get_map(map_id)
-    if not (get_settings().maps_dir / map_id / SOURCE_NAME).exists():
-        raise HTTPException(409, "Brak pliku źródłowego")
+LOG_NAME = "import.log"
+PARTS = ("source", "import", "log")
+
+
+def _part_paths(mdir: Path, part: str) -> list[Path]:
+    """Files/dirs belonging to one deletable part of a map."""
+    if not mdir.is_dir():
+        return []
+    if part == "source":
+        return [mdir / SOURCE_NAME] if (mdir / SOURCE_NAME).exists() else []
+    if part == "log":
+        return [mdir / LOG_NAME] if (mdir / LOG_NAME).exists() else []
+    # "import": vector tiles, coverage mask, tilemaker working files
+    return [p for p in mdir.iterdir() if p.name not in (SOURCE_NAME, LOG_NAME)]
+
+
+def _size(p: Path) -> int:
+    return _dir_size(p) if p.is_dir() else p.stat().st_size
+
+
+@router.get("/maps/{map_id}/contents")
+def map_contents(map_id: str) -> dict[str, Any]:
+    """What this map occupies on disk: its own parts and rendered outputs."""
+    _get_map(map_id)
+    settings = get_settings()
+    mdir = settings.maps_dir / map_id
+    labels = {
+        "source": "Plik źródłowy .osm.pbf",
+        "import": "Dane importu (kafelki wektorowe, maska pokrycia)",
+        "log": "Log importu",
+    }
+    parts = []
+    for part in PARTS:
+        paths = _part_paths(mdir, part)
+        if paths:
+            parts.append(
+                {"key": part, "label": labels[part], "bytes": sum(_size(p) for p in paths)}
+            )
+    outs = []
+    for job_id in _map_outputs(map_id):
+        d = settings.output_dir / job_id
+        try:
+            meta = json.loads((d / "metadata.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        meta["size_bytes"] = _dir_size(d)
+        outs.append(meta)
+    outs.sort(key=lambda m: m.get("created_at", ""), reverse=True)
+    return {"parts": parts, "outputs": outs}
+
+
+@router.delete("/maps/{map_id}/parts/{part}")
+def delete_map_part(map_id: str, part: str) -> dict[str, Any]:
+    """Delete one part of a map: ``source``, ``import`` or ``log``."""
+    if part not in PARTS:
+        raise HTTPException(400, "Nieznana część mapy")
+    _get_map(map_id)
+    mdir = get_settings().maps_dir / map_id
+    freed = 0
     with db.connect() as c:
         _ensure_idle(c, map_id)
-        c.execute("UPDATE maps SET status = 'uploaded', message = NULL WHERE id = ?", (m["id"],))
-    return {"job_id": queue.enqueue("import", {}, map_id=map_id)}
+        if part == "import" and not (mdir / SOURCE_NAME).exists():
+            raise HTTPException(409, "Bez pliku źródłowego usuń całą mapę")
+        for p in _part_paths(mdir, part):
+            freed += _size(p)
+            shutil.rmtree(p) if p.is_dir() else p.unlink()
+        if part == "import":
+            c.execute(
+                "UPDATE maps SET status = 'uploaded', bbox = NULL, message = NULL WHERE id = ?",
+                (map_id,),
+            )
+    return {"ok": True, "freed_bytes": freed}
+
+
+class ImportRequest(BaseModel):
+    profile: str = DEFAULT_PROFILE
+    # [west, south, east, north]; None = whole file
+    bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
+
+
+def _validated_bbox(bbox: list[float] | None, max_span: float | None = None) -> list[float] | None:
+    if bbox is None:
+        return None
+    w, s, e, n = bbox
+    if not (-180 <= w < e <= 180 and -90 <= s < n <= 90):
+        raise HTTPException(400, "Niepoprawny prostokąt (W S E N)")
+    if max_span is not None and (e - w > max_span or n - s > max_span):
+        # keep the centre, shrink to the allowed span
+        cx, cy = (w + e) / 2, (s + n) / 2
+        h = max_span / 2
+        w, e, s, n = cx - h, cx + h, cy - h, cy + h
+    return [round(v, 6) for v in (w, s, e, n)]
+
+
+def _check_profile(profile: str) -> None:
+    try:
+        get_profile(get_settings(), profile)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/profiles")
+def profiles() -> list[dict[str, str]]:
+    return [
+        {"id": p.id, "name": p.name, "description": p.description}
+        for p in list_profiles(get_settings())
+    ]
+
+
+@router.post("/maps/{map_id}/import")
+def import_map(map_id: str, body: ImportRequest) -> dict[str, str]:
+    """(Re)import the source PBF with a profile, optionally limited to an area."""
+    _get_map(map_id)
+    if not (get_settings().maps_dir / map_id / SOURCE_NAME).exists():
+        raise HTTPException(409, "Brak pliku źródłowego")
+    _check_profile(body.profile)
+    region = _validated_bbox(body.bbox)
+    with db.connect() as c:
+        _ensure_idle(c, map_id)
+        c.execute("UPDATE maps SET status = 'uploaded', message = NULL WHERE id = ?", (map_id,))
+    job_id = queue.enqueue("import", {"profile": body.profile, "region": region}, map_id=map_id)
+    return {"job_id": job_id}
+
+
+@router.post("/maps/{map_id}/reimport")
+def reimport_map(map_id: str) -> dict[str, str]:
+    """Repeat the import with the profile and area the map already has."""
+    m = _get_map(map_id)
+    return import_map(
+        map_id, ImportRequest(profile=m.get("profile") or DEFAULT_PROFILE, bbox=m.get("region"))
+    )
+
+
+# Largest side of a sample area in degrees (about 11 km at the equator).
+SAMPLE_MAX_SPAN = 0.1
+
+
+@router.post("/maps/{map_id}/sample")
+def create_sample(map_id: str, body: ImportRequest) -> dict[str, Any]:
+    """Small trial import of a profile for a preview before the real import."""
+    _get_map(map_id)
+    if not (get_settings().maps_dir / map_id / SOURCE_NAME).exists():
+        raise HTTPException(409, "Brak pliku źródłowego")
+    _check_profile(body.profile)
+    bbox = _validated_bbox(body.bbox, SAMPLE_MAX_SPAN)
+    if bbox is None:
+        raise HTTPException(400, "Próbka wymaga obszaru")
+    with db.connect() as c:
+        busy = c.execute(
+            "SELECT 1 FROM jobs WHERE map_id = ? AND kind = 'sample'"
+            " AND status IN ('queued','running')",
+            (map_id,),
+        ).fetchone()
+        if busy:
+            raise HTTPException(409, "Próbka jest już generowana")
+    job_id = queue.enqueue("sample", {"profile": body.profile, "bbox": bbox}, map_id=map_id)
+    return {"job_id": job_id, "bbox": bbox}
+
+
+@router.get("/maps/{map_id}/sample")
+def sample_info(map_id: str) -> dict[str, Any]:
+    _get_map(map_id)
+    mdir = get_settings().maps_dir / map_id
+    meta = mdir / "sample.json"
+    if not (meta.exists() and (mdir / "sample.mbtiles").exists()):
+        return {"exists": False}
+    return {"exists": True, **json.loads(meta.read_text(encoding="utf-8"))}
+
+
+@router.delete("/maps/{map_id}/sample")
+def delete_sample(map_id: str) -> dict[str, bool]:
+    _get_map(map_id)
+    mdir = get_settings().maps_dir / map_id
+    for name in ("sample.mbtiles", "sample.json", "sample.log"):
+        (mdir / name).unlink(missing_ok=True)
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ uploads

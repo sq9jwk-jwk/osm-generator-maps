@@ -25,7 +25,9 @@ CREATE TABLE IF NOT EXISTS maps (
     status      TEXT NOT NULL,          -- uploaded | importing | ready | failed
     bbox        TEXT,                   -- JSON [w,s,e,n]
     message     TEXT,
-    created_at  REAL NOT NULL
+    created_at  REAL NOT NULL,
+    profile     TEXT NOT NULL DEFAULT 'classic',
+    region      TEXT                    -- JSON [w,s,e,n] the import was limited to, or NULL
 );
 CREATE TABLE IF NOT EXISTS uploads (
     id          TEXT PRIMARY KEY,
@@ -78,13 +80,19 @@ def connect() -> Iterator[sqlite3.Connection]:
 def init_db() -> None:
     with connect() as c:
         c.executescript(SCHEMA)
+        # Databases created before profiles existed lack these columns.
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(maps)")}
+        if "profile" not in cols:
+            c.execute("ALTER TABLE maps ADD COLUMN profile TEXT NOT NULL DEFAULT 'classic'")
+        if "region" not in cols:
+            c.execute("ALTER TABLE maps ADD COLUMN region TEXT")
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
     d = dict(row)
-    for key in ("bbox", "params", "tiles"):
+    for key in ("bbox", "params", "tiles", "region"):
         if key in d and isinstance(d[key], str):
             d[key] = json.loads(d[key])
     return d

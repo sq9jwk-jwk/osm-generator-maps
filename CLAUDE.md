@@ -278,6 +278,27 @@ osm-tilegen/
   skompresowane).
 - `packaging/build-deb.sh` buduje pakiet, są gotowe usługi systemd.
 
+**Biblioteka map i profile importu** (po M0, przed etykietami):
+
+- Okno „Zarządzaj mapami…”: rozwijana lista zawartości mapy (PBF, dane importu,
+  log, każdy wynik osobno) z rozmiarami i usuwaniem pojedynczych części
+  (`GET /api/maps/{id}/contents`, `DELETE /api/maps/{id}/parts/{source|import|log}`).
+  Wyniki renderu nigdy nie są usuwane bez wyraźnej zgody użytkownika.
+- **Profile importu** to katalogi `tilemaker/profiles/<id>/{profile.json,config.json,process.lua}`
+  (`importer/profiles.py`). Są `classic` (domyślny, z warstwami `place` i
+  `transportation_name`) oraz `tourist` (+ szlaki `hiking`, `mountain_peak`, schroniska
+  w `poi`). `tourist/process.lua` jest kopią classic z dodatkami: zmiany wprowadzaj w obu.
+- Import przyjmuje `{profile, bbox}` (`POST /api/maps/{id}/import`). Przy `bbox` PBF jest
+  najpierw wycinany `osmium extract --strategy smart`, więc szlaki w okolicy, a nie w
+  całym kraju. Mapa zapamiętuje `profile` i `region` (kolumny w `maps`, migracja w `init_db`).
+- **Próbka przed importem:** zadanie `sample` robi mały import (max ok. 10×10 km, wokół środka
+  obszaru lub widoku) do `sample.mbtiles`, serwowany jako `?variant=sample`. Nie zmienia
+  statusu ani prawdziwego importu mapy. UI pokazuje ją z pasem „Importuj z tym profilem”.
+- Styl może wymagać profilu: `metadata["osm-tilegen"].profiles` w `style.json`
+  (pusta lista = działa z każdym). UI pokazuje tylko style zgodne z profilem mapy.
+- Wciąż brak: fontów (glify PBF), więc brak etykiet w stylach; poligonów mórz; wielu
+  importów jednej mapy naraz (dziś jeden import na mapę, nowy zastępuje stary).
+
 **Następne kroki:**
 
 1. **M0.5:** `scripts/spike-render.sh` na PC i RPi, potem implementacja

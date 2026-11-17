@@ -1,11 +1,34 @@
--- Minimal OpenMapTiles-compatible profile for osm-tilegen (tilemaker 3.x).
--- Produces the layers/attributes used by styles/basic. No sea polygons yet
--- (they need a coastline shapefile, see CLAUDE.md, "Morza i linia brzegowa").
+-- "Classic" profile for osm-tilegen (tilemaker 3.x), OpenMapTiles-compatible subset.
+-- Layers: transportation, transportation_name, place, water, waterway,
+-- landcover, landuse, park, building, boundary.
+-- No sea polygons yet (they need a coastline shapefile, see CLAUDE.md).
 
-node_keys = {}
+-- @NODE_KEYS@
+node_keys = { "place" }
 
 function init_function() end
 function exit_function() end
+
+function node_function()
+  local place = Find("place")
+  local name = Find("name")
+  if place ~= "" and name ~= "" then
+    local minz
+    if place == "country" or place == "state" then minz = 2
+    elseif place == "city" then minz = 4
+    elseif place == "town" then minz = 7
+    elseif place == "village" then minz = 10
+    elseif place == "suburb" or place == "hamlet" or place == "neighbourhood" then minz = 12
+    end
+    if minz then
+      Layer("place", false)
+      Attribute("class", place)
+      Attribute("name", name)
+      MinZoom(minz)
+    end
+  end
+  -- @NODE_EXTRA@
+end
 
 function way_function()
   local highway = Find("highway")
@@ -35,15 +58,26 @@ function way_function()
         or highway == "bridleway" or highway == "steps" or highway == "pedestrian" then class = "path"
     end
     if class then
-      Layer("transportation", false)
-      Attribute("class", class)
-      Attribute("subclass", highway)
       local minz = 12
       if class == "motorway" or class == "trunk" then minz = 4
       elseif class == "primary" then minz = 6
       elseif class == "secondary" then minz = 8
       elseif class == "tertiary" then minz = 10 end
+
+      Layer("transportation", false)
+      Attribute("class", class)
+      Attribute("subclass", highway)
+      -- @PATH_ATTRS@
       MinZoom(minz)
+
+      local name = Find("name")
+      if name ~= "" and class ~= "path" and class ~= "track" then
+        Layer("transportation_name", false)
+        Attribute("class", class)
+        Attribute("name", name)
+        Attribute("ref", Find("ref"))
+        MinZoom(math.max(minz, 12))
+      end
     end
   elseif railway == "rail" then
     Layer("transportation", false)
@@ -108,12 +142,9 @@ function way_function()
       if level > 4 then MinZoom(8) end
     end
   end
+
+  -- @WAY_EXTRA@
 end
 
-function relation_scan_function()
-  if Find("type") == "multipolygon" then
-    Accept()
-  end
-end
-
-function relation_function() end
+-- @RELATION_SCAN@
+function relation_scan_function() end

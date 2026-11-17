@@ -92,13 +92,50 @@
       <p id="library-total" class="muted"></p>
       <table id="library-table">
         <thead>
-          <tr><th>Nazwa</th><th>Wgrano</th><th>Obszar (W S E N)</th><th>Status</th>
+          <tr><th></th><th>Nazwa</th><th>Wgrano</th><th>Obszar (W S E N)</th><th>Status</th>
             <th>Plik PBF</th><th>Dane importu</th><th>Wyniki</th><th></th></tr>
         </thead>
         <tbody></tbody>
       </table>
       <pre id="library-log" hidden></pre>
     </dialog>
+    <dialog id="import-dlg">
+      <form method="dialog" class="dlg-head">
+        <h2 id="import-title">Import mapy</h2>
+        <button>Zamknij</button>
+      </form>
+      <div class="field">
+        <label>Profil danych
+          <select id="import-profile"></select>
+        </label>
+        <p id="import-profile-desc" class="hint"></p>
+      </div>
+      <div class="field">
+        <b>Obszar importu</b>
+        <label><input type="radio" name="import-area" value="all" checked /> cały plik</label>
+        <label><input type="radio" name="import-area" value="rect" /> wybrany prostokąt</label>
+        <div class="row">
+          <button id="import-draw" type="button">Narysuj prostokąt na mapie</button>
+          <span id="import-bbox" class="muted"></span>
+        </div>
+        <p class="hint">Ograniczenie obszaru skraca import i zmniejsza zużycie pamięci. Wycinek
+          zachowuje całe szlaki i obiekty na krawędzi.</p>
+      </div>
+      <div class="field">
+        <b>Zobacz przed importem</b>
+        <p class="hint">Próbka to mały fragment (ok. 10×10 km wokół środka obszaru lub widoku mapy)
+          zaimportowany tym profilem. Powstaje w kilkadziesiąt sekund i nie zmienia obecnej mapy.</p>
+        <button id="import-sample" type="button">Pokaż próbkę na mapie</button>
+      </div>
+      <div class="row end">
+        <button id="import-start" type="button" class="primary-inline">Importuj</button>
+      </div>
+    </dialog>
+    <div id="sample-bar" hidden>
+      <span id="sample-text"></span>
+      <button id="sample-import" class="primary-inline">Importuj z tym profilem</button>
+      <button id="sample-close">Zamknij próbkę</button>
+    </div>
     <div id="toast" hidden></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

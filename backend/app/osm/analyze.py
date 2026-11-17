@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 import subprocess
 from pathlib import Path
 
@@ -50,7 +51,7 @@ def coverage_from_mbtiles(mbtiles: Path, zoom: int) -> list[tuple[int, int]]:
     vector MBTiles is a fast and exact coverage mask. MBTiles stores rows in
     TMS order, so Y is flipped here.
     """
-    with sqlite3.connect(f"file:{mbtiles}?mode=ro", uri=True) as conn:
+    with closing(sqlite3.connect(f"file:{mbtiles}?mode=ro", uri=True)) as conn:
         rows = conn.execute(
             "SELECT tile_column, tile_row FROM tiles WHERE zoom_level = ?", (zoom,)
         ).fetchall()

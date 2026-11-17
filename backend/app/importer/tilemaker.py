@@ -1,4 +1,4 @@
-"""Wrapper around the `tilemaker` binary (Debian package `tilemaker`)."""
+"""Wrappers around `tilemaker` and `osmium extract` (Debian packages)."""
 
 from __future__ import annotations
 
@@ -9,32 +9,37 @@ from pathlib import Path
 from ..core.config import Settings
 
 
-def build_command(settings: Settings, pbf: Path, out: Path, store_dir: Path) -> list[str]:
+def build_command(
+    settings: Settings,
+    pbf: Path,
+    out: Path,
+    store_dir: Path,
+    config: Path | None = None,
+    process: Path | None = None,
+) -> list[str]:
+    config = config or settings.tilemaker_config
+    process = process or settings.tilemaker_process
     cmd = [settings.tilemaker_bin, "--input", str(pbf), "--output", str(out)]
-    if settings.tilemaker_config:
-        cmd += ["--config", str(settings.tilemaker_config)]
-    if settings.tilemaker_process:
-        cmd += ["--process", str(settings.tilemaker_process)]
+    if config:
+        cmd += ["--config", str(config)]
+    if process:
+        cmd += ["--process", str(process)]
     if settings.tilemaker_store:
         store_dir.mkdir(parents=True, exist_ok=True)
         cmd += ["--store", str(store_dir)]
     return cmd
 
 
-def run_tilemaker(
-    settings: Settings,
-    pbf: Path,
-    out: Path,
-    work_dir: Path,
+def _stream(
+    cmd: list[str],
+    cwd: Path,
     log: Callable[[str], None],
     should_cancel: Callable[[], bool],
+    what: str,
 ) -> None:
-    """Run tilemaker, streaming its output to ``log``. Raises on failure."""
-    cmd = build_command(settings, pbf, out, work_dir / "store")
     log("$ " + " ".join(cmd))
-    # tilemaker resolves shapefile paths (water polygons) relative to its cwd.
     proc = subprocess.Popen(
-        cmd, cwd=work_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
     assert proc.stdout is not None
     tail: list[str] = []
@@ -48,6 +53,43 @@ def run_tilemaker(
             proc.wait(timeout=30)
             raise InterruptedError("cancelled")
     if proc.wait() != 0:
-        raise RuntimeError(
-            f"tilemaker exited with code {proc.returncode}: " + " | ".join(tail)
-        )
+        raise RuntimeError(f"{what} exited with code {proc.returncode}: " + " | ".join(tail))
+
+
+def run_tilemaker(
+    settings: Settings,
+    pbf: Path,
+    out: Path,
+    work_dir: Path,
+    log: Callable[[str], None],
+    should_cancel: Callable[[], bool],
+    config: Path | None = None,
+    process: Path | None = None,
+) -> None:
+    """Run tilemaker, streaming its output to ``log``. Raises on failure."""
+    cmd = build_command(settings, pbf, out, work_dir / "store", config, process)
+    # tilemaker resolves shapefile paths (water polygons) relative to its cwd.
+    _stream(cmd, work_dir, log, should_cancel, "tilemaker")
+
+
+def extract_region(
+    settings: Settings,
+    src: Path,
+    dst: Path,
+    bbox: tuple[float, float, float, float],
+    work_dir: Path,
+    log: Callable[[str], None],
+    should_cancel: Callable[[], bool],
+) -> None:
+    """Cut ``bbox`` (W,S,E,N) out of ``src``. ``smart`` keeps multipolygon and
+    route relations complete at the edge of the area."""
+    w, s, e, n = bbox
+    cmd = [
+        settings.osmium_bin, "extract",
+        "--bbox", f"{w},{s},{e},{n}",
+        "--strategy", "smart",
+        "--overwrite",
+        "-o", str(dst),
+        str(src),
+    ]
+    _stream(cmd, work_dir, log, should_cancel, "osmium extract")

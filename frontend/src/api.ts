@@ -8,6 +8,8 @@ export interface MapInfo {
   status: "uploaded" | "importing" | "ready" | "failed";
   bbox: BBox | null;
   message: string | null;
+  profile: string;
+  region: BBox | null;
   created_at: number;
   source_bytes: number;
   import_bytes: number;
@@ -18,7 +20,7 @@ export interface DeleteResult { ok: boolean; freed_bytes: number; removed_output
 
 export interface Job {
   id: string;
-  kind: "import" | "render";
+  kind: "import" | "render" | "sample";
   map_id: string | null;
   status: "queued" | "running" | "done" | "failed" | "cancelled";
   progress: number;
@@ -39,8 +41,16 @@ export interface OutputInfo {
   created_at: string;
 }
 
+export type MapPart = "source" | "import" | "log";
+export interface MapContents {
+  parts: { key: MapPart; label: string; bytes: number }[];
+  outputs: OutputInfo[];
+}
+
 export interface Coverage { zoom: number; tiles: [number, number][]; }
-export interface StyleInfo { id: string; name: string; }
+export interface StyleInfo { id: string; name: string; profiles: string[]; }
+export interface ProfileInfo { id: string; name: string; description: string; }
+export interface SampleInfo { exists: boolean; profile?: string; bbox?: BBox; }
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -66,6 +76,16 @@ export const api = {
       "DELETE",
       `/api/maps/${id}?import_only=${!!opts.importOnly}&outputs=${!!opts.outputs}`,
     ),
+  contents: (id: string) => req<MapContents>("GET", `/api/maps/${id}/contents`),
+  deletePart: (id: string, part: MapPart) =>
+    req<{ freed_bytes: number }>("DELETE", `/api/maps/${id}/parts/${part}`),
+  profiles: () => req<ProfileInfo[]>("GET", "/api/profiles"),
+  importMap: (id: string, profile: string, bbox: BBox | null) =>
+    req<{ job_id: string }>("POST", `/api/maps/${id}/import`, { profile, bbox }),
+  createSample: (id: string, profile: string, bbox: BBox) =>
+    req<{ job_id: string; bbox: BBox }>("POST", `/api/maps/${id}/sample`, { profile, bbox }),
+  sampleInfo: (id: string) => req<SampleInfo>("GET", `/api/maps/${id}/sample`),
+  deleteSample: (id: string) => req("DELETE", `/api/maps/${id}/sample`),
   reimport: (id: string) => req<{ job_id: string }>("POST", `/api/maps/${id}/reimport`),
   importLog: (id: string) => req<{ log: string }>("GET", `/api/maps/${id}/log`),
   coverage: (id: string) => req<Coverage>("GET", `/api/maps/${id}/coverage`),

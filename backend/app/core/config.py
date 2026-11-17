@@ -33,6 +33,7 @@ class Settings:
     tilemaker_process: Path | None = None
     tilemaker_store: bool = False  # True on low-RAM machines (RPi)
     water_polygons: Path | None = None
+    profiles_dir: Path | None = None
     coverage_zoom: int = 10
     max_upload_bytes: int = 200 * 1024**3
 
@@ -61,11 +62,11 @@ def _opt_path(value: str | None) -> Path | None:
     return Path(value) if value else None
 
 
-def _bundled_tilemaker_file(name: str) -> Path | None:
-    """Our bundled tilemaker config/profile (repo checkout or installed package)."""
+def _bundled_profiles_dir() -> Path | None:
+    """Our bundled tilemaker profiles (repo checkout or installed package)."""
     for base in (REPO_ROOT / "tilemaker", Path("/usr/share/osm-tilegen/tilemaker")):
-        if (base / name).is_file():
-            return base / name
+        if (base / "profiles").is_dir():
+            return base / "profiles"
     return None
 
 
@@ -93,10 +94,9 @@ def get_settings() -> Settings:
         render_engine=render.get("engine", "debug"),
         tilemaker_bin=importer.get("tilemaker_bin", "tilemaker"),
         osmium_bin=importer.get("osmium_bin", "osmium"),
-        tilemaker_config=_opt_path(importer.get("tilemaker_config"))
-        or _bundled_tilemaker_file("config.json"),
-        tilemaker_process=_opt_path(importer.get("tilemaker_process"))
-        or _bundled_tilemaker_file("process.lua"),
+        tilemaker_config=_opt_path(importer.get("tilemaker_config")),
+        tilemaker_process=_opt_path(importer.get("tilemaker_process")),
+        profiles_dir=_opt_path(importer.get("profiles_dir")) or _bundled_profiles_dir(),
         tilemaker_store=bool(importer.get("store_on_disk", False)),
         water_polygons=_opt_path(importer.get("water_polygons")),
         coverage_zoom=int(importer.get("coverage_zoom", 10)),
