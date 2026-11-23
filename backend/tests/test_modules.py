@@ -106,3 +106,17 @@ def test_custom_import_records_modules_and_archives_previous(monkeypatch):
         assert m["profile"] == "classic" and m["modules"] is None
         archived = c.get(f"/api/maps/{map_id}/contents").json()["imports"]
         assert archived[0]["profile"] == "custom" and archived[0]["modules"] == ["peaks"]
+
+
+def test_style_tile_url_changes_with_the_import_file():
+    import os
+
+    with TestClient(app) as c:
+        map_id = _map_with_files()
+        url1 = c.get(f"/api/maps/{map_id}/style/classic.json").json()["sources"]
+        t1 = next(iter(url1.values()))["tiles"][0]
+        assert "?v=" in t1
+        f = get_settings().maps_dir / map_id / "vector.mbtiles"
+        os.utime(f, (1_700_000_000, 1_700_000_000))
+        t2 = next(iter(c.get(f"/api/maps/{map_id}/style/classic.json").json()["sources"].values()))["tiles"][0]
+        assert t2.endswith("?v=1700000000") and t1 != t2

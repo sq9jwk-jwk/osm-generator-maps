@@ -105,9 +105,28 @@ async function refreshMaps() {
   }
 }
 
+/** Which import the style dropdown was last chosen for (a new import deserves a fresh default). */
+let styleFor = "";
+
+/** Best default view for an import: a labelled style, tourist when the import has trails. */
+function defaultStyleFor(m: MapInfo): string {
+  const has = (id: string) => [...$<HTMLSelectElement>("style").options].some((o) => o.value === id);
+  const hiking = m.profile === "tourist" || (m.profile === "custom" && !!m.modules?.includes("hiking"));
+  if (m.profile === "full" && has("bright")) return "bright";
+  if (hiking && has("tourist")) return "tourist";
+  return has("classic") ? "classic" : "basic";
+}
+
 async function selectMap(id: string | null) {
   current = maps.find((m) => m.id === id) ?? null;
   populateStyles(current?.profile ?? "classic");
+  if (current?.status === "ready") {
+    const sig = `${current.id}|${current.profile}|${(current.modules ?? []).join(",")}|${current.import_bytes}`;
+    if (sig !== styleFor) {
+      styleFor = sig;
+      $<HTMLSelectElement>("style").value = defaultStyleFor(current);
+    }
+  }
   const ready = current?.status === "ready";
   enable("sec-style", ready);
   enable("sec-output", ready);

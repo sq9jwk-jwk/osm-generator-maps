@@ -82,7 +82,9 @@ def build_style(style_id: str, map_id: str, base_url: str, variant: str = "") ->
     for src in style.get("sources", {}).values():
         if src.get("type") == "vector":
             src.pop("url", None)
-            query = f"?variant={variant}" if variant else ""
+            # The tile URL carries the file's mtime, so a new or re-activated import is never
+            # served from the browser's cache of an earlier one.
+            query = f"?variant={variant}" if variant else f"?v={int(path.stat().st_mtime)}"
             src["tiles"] = [f"{base}/api/maps/{map_id}/tiles/{{z}}/{{x}}/{{y}}.pbf{query}"]
             src["minzoom"], src["maxzoom"] = minzoom, maxzoom
             src["attribution"] = "© OpenMapTiles © OpenStreetMap contributors"

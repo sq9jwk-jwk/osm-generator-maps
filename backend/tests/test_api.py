@@ -88,7 +88,7 @@ def test_preview_tile_and_style():
         assert any(s["id"] == "basic" for s in styles)
         st = c.get(f"/api/maps/{map_id}/style/basic.json").json()
         src = next(iter(st["sources"].values()))
-        assert src["tiles"][0].endswith(f"/api/maps/{map_id}/tiles/{{z}}/{{x}}/{{y}}.pbf")
+        assert f"/api/maps/{map_id}/tiles/{{z}}/{{x}}/{{y}}.pbf?v=" in src["tiles"][0]
         assert c.get(f"/api/maps/{map_id}/coverage").json()["zoom"] == 10
 
 
