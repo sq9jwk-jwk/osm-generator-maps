@@ -70,9 +70,14 @@ sudo systemctl restart osm-tilegen osm-tilegen-worker
 ```bash
 cd osm-tilegen
 git pull
+rm -f build/*.deb          # stare paczki w build/ psują glob poniżej
 make deb
-sudo apt install -y ./build/osm-tilegen_*_$(dpkg --print-architecture).deb
+sudo apt install -y --reinstall ./build/osm-tilegen_*_$(dpkg --print-architecture).deb
 ```
+
+`--reinstall` działa także wtedy, gdy numer wersji się nie zmienił. Komunikat
+`Download is performed unsandboxed as root ... _apt` jest nieszkodliwy
+(plik leży w katalogu roota).
 
 Podniesienie wersji przed budową (żeby `apt` na pewno zainstalował nowy pakiet):
 
@@ -97,9 +102,8 @@ w `tilemaker/` (nowe warstwy danych, np. POI, numery domów) dotyczą dopiero
 
 Uwagi:
 - Jeśli zmieniła się tylko treść, a numer wersji nie (`backend/app/__init__.py`),
-  `apt` może uznać pakiet za już zainstalowany. Wtedy użyj:
-  `sudo dpkg -i build/osm-tilegen_*_$(dpkg --print-architecture).deb`
-  albo podnieś wersję przed `make deb`.
+  zwykły `apt install` uzna pakiet za już zainstalowany. Użyj
+  `apt install --reinstall` (jak wyżej) albo podnieś wersję przed `make deb`.
 - Aktualizacja zachowuje mapy, wyniki (`/var/lib/osm-tilegen`) i
   `/etc/osm-tilegen/config.toml`. Usługi są zatrzymywane i uruchamiane
   ponownie automatycznie.
