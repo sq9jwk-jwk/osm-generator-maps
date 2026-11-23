@@ -16,7 +16,10 @@ Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 # Adjust for the machine (e.g. 3G on a 4 GB Raspberry Pi).
+MemoryHigh=70%
 MemoryMax=80%
+IOWeight=50
+# CPUQuota is set per machine by postinst (drop-in limits.conf, 80% of cores).
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

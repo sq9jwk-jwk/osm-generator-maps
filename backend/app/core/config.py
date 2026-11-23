@@ -25,7 +25,8 @@ class Settings:
     frontend_dist: Path
     host: str = "0.0.0.0"
     port: int = 8080
-    render_threads: int = 0  # 0 = number of CPU cores
+    render_threads: int = 0  # 0 = derived from max_cpu_percent
+    max_cpu_percent: int = 80  # share of CPU cores heavy jobs may use (1-100)
     render_engine: str = "debug"  # "debug" | "maplibre"
     tilemaker_bin: str = "tilemaker"
     osmium_bin: str = "osmium"
@@ -53,9 +54,23 @@ class Settings:
     def db_path(self) -> Path:
         return self.data_dir / "db.sqlite"
 
+    @property
+    def worker_threads(self) -> int:
+        """Threads for tilemaker/render: explicit ``render.threads`` or ``max_cpu_percent`` of cores."""
+        return compute_threads(self.render_threads, self.max_cpu_percent, os.cpu_count() or 1)
+
     def ensure_dirs(self) -> None:
         for d in (self.uploads_dir, self.maps_dir, self.output_dir):
             d.mkdir(parents=True, exist_ok=True)
+
+
+def compute_threads(explicit: int, percent: int, cores: int) -> int:
+    """Explicit thread count (capped at ``cores``) or ``percent`` of cores, at least 1."""
+    cores = max(1, cores)
+    if explicit > 0:
+        return min(explicit, cores)
+    percent = min(100, max(1, percent))
+    return max(1, cores * percent // 100)
 
 
 def _opt_path(value: str | None) -> Path | None:
@@ -91,6 +106,7 @@ def get_settings() -> Settings:
         host=server.get("host", "0.0.0.0"),
         port=int(server.get("port", 8080)),
         render_threads=int(render.get("threads", 0)),
+        max_cpu_percent=int(raw.get("limits", {}).get("max_cpu_percent", 80)),
         render_engine=render.get("engine", "debug"),
         tilemaker_bin=importer.get("tilemaker_bin", "tilemaker"),
         osmium_bin=importer.get("osmium_bin", "osmium"),

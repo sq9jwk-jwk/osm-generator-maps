@@ -334,6 +334,23 @@ osm-tilegen/
   Nie testowane z prawdziwym tilemakerem.
 - Wciąż brak: poligonów mórz (shapefile do tilemakera); granic administracyjnych z relacji (moduł `boundaries` bierze tylko linie z tagiem). Profil `tourist` nie rozszerza `full`.
 
+**Wyszukiwarka adresów (offline)** (`backend/app/osm/search.py`, `frontend/src/search.ts`):
+
+- Indeks `maps/<id>/exports/<export_id>/search.sqlite` (SQLite FTS5, stdlib, bez nowych zależności) powstaje z PBF
+  obciętego do obszaru eksportu: `osmium tags-filter` → `osmium export -f geojsonseq` → agregacja w Pythonie.
+  Rodzaje wpisów: `place`, `street` (segmenty o tej samej nazwie łączone, jeśli leżą blisko siebie, więc „Kościelna”
+  z dwóch wsi to dwie ulice), `postcode`, `address` (ulica + numer), `poi`. Tekst jest składany bez diakrytyków
+  (`fold`), więc „zolkiewskiego” znajduje „Żółkiewskiego”; kod pocztowy działa z myślnikiem i bez.
+- Indeks buduje się na końcu zadania `import` (parametr `search`, domyślnie true, checkbox w oknie eksportu).
+  Jego błąd **nie** psuje eksportu (tylko wpis w `import.log`). Istniejące eksporty: `POST /api/exports/{id}/search/index`
+  (zadanie `geocode`, przycisk w polu wyszukiwania). `GET /api/exports/{id}/search?q=&limit=` (409 bez indeksu);
+  `ExportInfo.search` mówi, czy indeks jest.
+- Pomiar (Małopolska, 200 MB, Debian 13 w WSL): 82 s, indeks 271 MB, 1,5 mln wpisów, zapytanie 2–300 ms. Szczyt RAM
+  ok. 2,3 GB pochodzi z `osmium tags-filter`, nie z Pythona. Na RPi dla dużych plików odznacz indeks.
+- Testy: `backend/tests/test_search.py` (w tym prawdziwy `tatry.osm.pbf`, gdy jest `osmium`).
+- Znane: przy bardzo wąskim oknie (mapa o zerowej szerokości, np. 420 px) `fitBounds` w `selectExport` rzuca
+  `Invalid LngLat (NaN)`. To błąd istniejący wcześniej, niezwiązany z wyszukiwaniem.
+
 **Następne kroki:**
 
 1. **M0.5:** `scripts/spike-render.sh` na PC i RPi, potem implementacja

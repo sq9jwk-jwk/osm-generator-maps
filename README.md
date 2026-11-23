@@ -15,6 +15,7 @@ Plan, decyzje i konwencje: **[CLAUDE.md](CLAUDE.md)**.
    pokrycia.
 3. **Podgląd:** MapLibre GL JS rysuje mapę w przeglądarce z lokalnych kafelków
    wektorowych. Style (widoki), fonty i ikony są w pakiecie.
+   Opcjonalnie powstaje też indeks wyszukiwania adresów (ulice, kody pocztowe).
 4. Wybierasz styl, zoom, rozmiar kafelka (128/256/512 px), format
    (PNG/PNG-8/JPG) i numerację (XYZ/TMS), po czym zaznaczasz kwadraty siatki.
 5. **Render** (zadanie w tle, z postępem, anulowaniem i wznawianiem) zapisuje
@@ -137,20 +138,70 @@ make dev-frontend     # opcjonalnie: UI z hot-reload na http://localhost:5173
 
 Testy: `make test`.
 
-## Stan
+## Funkcje
 
-Działa:
-- upload `.osm.pbf` porcjami z wznawianiem, biblioteka map, usuwanie,
-- import: bbox (osmium) → kafelki wektorowe (tilemaker) → maska pokrycia,
-- podgląd w kilku stylach (MapLibre GL JS, offline), obrys pliku,
-- siatka zaznaczania XYZ: klik, Shift+przeciągnij, Alt+przeciągnij, przenoszenie
-  zaznaczenia między poziomami siatki, liczniki i szacowany rozmiar,
-- zadania render z postępem, anulowaniem i wznawianiem; PNG / PNG-8 / JPG,
-  128/256/512 px, XYZ/TMS, `metadata.json`, pobieranie ZIP (strumieniowo),
-- pakiet `.deb` + usługi systemd.
+**Biblioteka map i eksporty**
+- Upload `.osm.pbf` porcjami (8 MiB) z wznawianiem, walidacja i kontrola miejsca.
+- Model *źródło → eksporty*: z jednego wgranego pliku powstaje dowolnie wiele
+  eksportów (własny profil, moduły i obszar). Eksporty są równorzędne, można je
+  usuwać osobno. Nieudany eksport zostaje z logiem, aż go usuniesz.
+- Obszar eksportu: cały plik albo kilka prostokątów (nakładające się łączą się,
+  PBF jest wycinany `osmium extract`, więc szlaki w okolicy zostają kompletne).
+- **Próbka** przed importem: mały fragment (ok. 10×10 km) zaimportowany wybranym
+  profilem, bez tworzenia eksportu.
+- Okno „Zarządzaj mapami”: rozmiary, zawartość, usuwanie plików źródłowych,
+  eksportów i wyników (wyniki nigdy nie znikają bez zgody).
 
-Do zrobienia: patrz CLAUDE.md, sekcja 12 „Stan projektu”. Najważniejsze to
-**prawdziwy renderer (spike M0.5)**. Teraz kafelki rysuje silnik `debug`
-(ramka + napis z/x/y).
+**Profile danych (tilemaker)**
+- `classic` (domyślny): drogi z obwódkami, mosty/tunele, koleje, wody, użytki,
+  etykiety, numery domów, ogólne POI.
+- `tourist`: dodatkowo szlaki turystyczne, szczyty, schroniska, źródła, punkty
+  widokowe, ścieżki wg `sac_scale`, obszary chronione.
+- `full`: oficjalny profil OpenMapTiles (wymagany przez style Bright, Positron,
+  Dark Matter, Liberty).
+- `custom`: własny zestaw modułów wybieranych checkboxami.
+
+**Podgląd i style** (MapLibre GL JS, w pełni offline, fonty i sprite'y w pakiecie)
+- Style: Klasyczny, Turystyczny, Podstawowy (bez etykiet), OSM Bright, Positron,
+  Dark Matter, OSM Liberty. Lista pokazuje tylko style zgodne z profilem eksportu.
+- Obrys obszaru eksportu na mapie i atrybucja „© OpenStreetMap contributors”.
+
+**Wyszukiwarka adresów (offline)**
+- Pole na mapie z podpowiedziami: ulice, adresy z numerem, kody pocztowe,
+  miejscowości i miejsca (szczyty, sklepy, atrakcje).
+- Działa bez polskich znaków (`zolkiewskiego` → „Żółkiewskiego”), kod pocztowy z
+  myślnikiem i bez, nawigacja strzałkami, Enter, Escape.
+- Indeks (`search.sqlite`, SQLite FTS5) powstaje razem z eksportem (checkbox w
+  oknie eksportu) albo później przyciskiem „Zbuduj indeks wyszukiwania”.
+  Dla Małopolski (200 MB): ok. 80 s, 270 MB, szczyt RAM ok. 2,3 GB; na Raspberry Pi
+  przy dużych plikach lepiej go odznaczyć.
+
+**Siatka i generowanie kafelków**
+- Siatka zaznaczania XYZ na dowolnym poziomie ≤ zoom wyjściowy: klik,
+  Shift+przeciągnij (zaznacz prostokąt), Alt+przeciągnij (odznacz), zachowanie
+  zaznaczenia przy zmianie poziomu siatki, liczniki i szacowany rozmiar.
+  Kafelki poza danymi są niedostępne (maska pokrycia).
+- Parametry: zoom lub zakres zoomów, kafelek 128/256/512 px, format
+  PNG / PNG-8 / JPG (jakość), numeracja XYZ lub TMS.
+- Render w tle z postępem, anulowaniem i wznawianiem po restarcie (pomija gotowe
+  kafelki). Wynik: `z/x/y.ext` + `metadata.json`, historia, pobieranie jako ZIP
+  (strumieniowo).
+- Zaznaczenia można zapisywać i nazywać (API gotowe, UI w toku).
+
+**System**
+- Pakiet `.deb` (amd64/arm64), dwie usługi systemd (API+UI i worker), konfiguracja
+  w `/etc/osm-tilegen/config.toml`, profil oszczędny dla Raspberry Pi.
+- Całość działa bez internetu (brak CDN i zewnętrznych adresów).
+
+## Stan i ograniczenia
+
+- Kafelki rysuje na razie silnik `debug` (ramka + napis z/x/y). **Prawdziwy
+  renderer (MapLibre Native, spike M0.5) jest największym brakującym elementem.**
+  Podgląd w przeglądarce i wyszukiwarka działają już na prawdziwych danych.
+- Brak poligonów mórz (morze renderuje się jak ląd) i warstnic (wymagają DEM).
+- Profile `tourist`, `custom` i rozszerzone `classic` nie były testowane na wielkich
+  plikach na Raspberry Pi.
+
+Pełna lista zadań: CLAUDE.md, sekcja 12 „Stan projektu”.
 
 Dane mapy © OpenStreetMap contributors, licencja ODbL.

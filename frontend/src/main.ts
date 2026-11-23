@@ -7,6 +7,8 @@ import {
   type ModuleInfo, type ProfileInfo, type StyleInfo,
 } from "./api";
 import { SelectionGrid } from "./grid";
+import { MeasureControl } from "./measure";
+import { SearchControl } from "./search";
 import { estimateBytes, formatBytes, regrid } from "./tiles";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -22,7 +24,15 @@ const map = new maplibregl.Map({ container: "map", style: EMPTY_STYLE, center: [
 map.addControl(new maplibregl.NavigationControl(), "top-right");
 map.addControl(new maplibregl.ScaleControl({}), "bottom-left");
 
+const searchCtl = new SearchControl((id) => {
+  api.buildSearch(id).then(() => { toast("Budowanie indeksu wyszukiwania dodane do kolejki"); void refreshJobs(); })
+    .catch((e) => toast(String(e)));
+});
+map.addControl(searchCtl, "top-left");
 const grid = new SelectionGrid(map);
+const measure = new MeasureControl();
+measure.onToggle = (on) => { grid.blocked = on; };
+map.addControl(measure, "top-right");
 let current: ExportInfo | null = null;
 let maps: MapInfo[] = [];
 let profiles: ProfileInfo[] = [];
@@ -37,6 +47,15 @@ function toast(msg: string) {
 }
 
 function enable(id: string, on: boolean) { $(id).classList.toggle("disabled", !on); }
+
+/** Browse-only by default; the checkbox turns on output parameters and tile selection. */
+function applyGenerateMode() {
+  const on = $<HTMLInputElement>("gen-enable").checked;
+  $("sec-output").hidden = !on;
+  $("sec-select").hidden = !on;
+  grid.setActive(on);
+}
+$("gen-enable").addEventListener("change", applyGenerateMode);
 
 // ------------------------------------------------------------------ overlays
 
@@ -144,6 +163,7 @@ async function refreshMaps() {
     ul.append(li);
   }
   if (library.open) renderLibrary();
+  updateSearch();
   // The export we are looking at may have just finished (or been removed).
   if (current) {
     const fresh = exportsOf().find((e) => e.id === current!.id);
@@ -164,8 +184,23 @@ function defaultStyleFor(e: ExportInfo): string {
   return has("classic") ? "classic" : "basic";
 }
 
+/** Keeps the search box in step with the selected export (its index may have just been built). */
+function updateSearch() {
+  const fresh = current ? exportsOf().find((e) => e.id === current!.id) : undefined;
+  const ready = fresh?.status === "ready";
+  searchCtl.setState({
+    exportId: ready ? fresh!.id : null,
+    indexed: !!fresh?.search,
+    building: !!fresh && lastJobs.some((j) => j.kind === "geocode" && j.export_id === fresh.id
+      && (j.status === "queued" || j.status === "running")),
+  });
+}
+
+let lastJobs: Job[] = [];
+
 async function selectExport(id: string | null) {
   current = exportsOf().find((e) => e.id === id) ?? null;
+  updateSearch();
   populateStyles(current?.profile ?? "classic");
   if (current?.status === "ready") {
     const sig = `${current.id}|${current.bytes}`;
@@ -178,6 +213,8 @@ async function selectExport(id: string | null) {
   enable("sec-style", ready);
   enable("sec-output", ready);
   enable("sec-select", ready);
+  enable("sec-generate", ready);
+  if (!ready) { $<HTMLInputElement>("gen-enable").checked = false; applyGenerateMode(); }
   if (!current) {
     map.setStyle(EMPTY_STYLE);
     grid.setCoverage(null);
@@ -568,6 +605,7 @@ $("import-start").addEventListener("click", async () => {
       profile: importProfile(),
       modules: importModules(),
       bboxes,
+      search: $<HTMLInputElement>("import-search").checked,
     });
     importDlg.close();
     toast("Eksport dodany do kolejki");
@@ -747,11 +785,12 @@ const STATUS_PL: Record<Job["status"], string> = {
 
 async function refreshJobs() {
   const jobs = await api.jobs();
+  lastJobs = jobs;
   const ul = $("jobs");
   ul.innerHTML = "";
   for (const j of jobs.slice(0, 15)) {
     const li = document.createElement("li");
-    const label = { import: "Import", render: "Render", sample: "Próbka" }[j.kind];
+    const label = { import: "Import", render: "Render", sample: "Próbka", geocode: "Indeks adresów" }[j.kind];
     const exp = exportsOf().find((e) => e.id === j.export_id);
     const mapName = exp ? exportLabel(exp) : maps.find((m) => m.id === j.map_id)?.name ?? "";
     li.innerHTML = `<span>${label} <span class="muted">${mapName}</span><br>
@@ -775,7 +814,7 @@ async function refreshJobs() {
   }
   $<HTMLButtonElement>("clear-jobs").hidden = !jobs.some(
     (j) => j.status !== "running" && j.status !== "queued");
-  if (jobs.some((j) => j.kind === "import")) refreshMaps();
+  if (jobs.some((j) => j.kind === "import" || j.kind === "geocode")) refreshMaps();
 }
 
 $("clear-jobs").addEventListener("click", async () => {

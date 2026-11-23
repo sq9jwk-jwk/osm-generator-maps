@@ -89,6 +89,24 @@ def test_tilemaker_command_uses_profile_files():
     assert cmd[cmd.index("--process") + 1] == str(p.process)
 
 
+def test_compute_threads():
+    from app.core.config import compute_threads
+
+    assert compute_threads(0, 80, 4) == 3
+    assert compute_threads(0, 80, 1) == 1
+    assert compute_threads(0, 80, 16) == 12
+    assert compute_threads(0, 0, 8) == 1  # percent clamped to >= 1
+    assert compute_threads(0, 500, 8) == 8  # percent clamped to <= 100
+    assert compute_threads(2, 80, 8) == 2  # explicit wins
+    assert compute_threads(32, 80, 8) == 8  # explicit capped at cores
+
+
+def test_tilemaker_gets_thread_limit():
+    s = get_settings()
+    cmd = build_command(s, Path("in.pbf"), Path("out.mbtiles"), Path("store"))
+    assert cmd[cmd.index("--threads") + 1] == str(s.worker_threads)
+
+
 def test_profiles_endpoint_and_style_requirements():
     with TestClient(app) as c:
         names = {p["id"] for p in c.get("/api/profiles").json()}
@@ -110,7 +128,7 @@ def test_create_export_makes_folder_row_and_job():
         with db.connect() as conn:
             job = db.row_to_dict(conn.execute("SELECT * FROM jobs WHERE id = ?", (r.json()["job_id"],)).fetchone())
         assert job["kind"] == "import" and job["export_id"] == exp_id and job["map_id"] == map_id
-        assert job["params"] == {"profile": "tourist", "modules": None, "regions": [[19.0, 49.5, 19.5, 49.8]]}
+        assert job["params"] == {"profile": "tourist", "modules": None, "regions": [[19.0, 49.5, 19.5, 49.8]], "search": True}
         e = c.get(f"/api/maps/{map_id}").json()["exports"][0]
         assert e["name"] == "Tatry" and e["status"] == "importing" and e["region"] == [19.0, 49.5, 19.5, 49.8]
         # several exports of one source may exist (and be queued) at once
@@ -273,7 +291,7 @@ def test_import_handler_fills_the_export_folder(monkeypatch):
     with TestClient(app) as c:
         map_id = _source()
         region = [19.0, 49.5, 19.5, 49.8]
-        r = c.post(f"/api/maps/{map_id}/exports", json={"profile": "tourist", "bboxes": [region]})
+        r = c.post(f"/api/maps/{map_id}/exports", json={"profile": "tourist", "bboxes": [region], "search": False})
         _run_job(handlers, r.json()["job_id"])
 
         assert calls == [("extract", (tuple(region),)), ("tilemaker", "region.tmp.osm.pbf", "tourist", "tourist")]
@@ -293,7 +311,7 @@ def test_import_handler_whole_file_default_profile(monkeypatch):
     handlers = _fake_tools(monkeypatch, calls)
     with TestClient(app) as c:
         map_id = _source()
-        r = c.post(f"/api/maps/{map_id}/exports", json={})
+        r = c.post(f"/api/maps/{map_id}/exports", json={"search": False})
         _run_job(handlers, r.json()["job_id"])
         assert calls == [("tilemaker", "source.osm.pbf", "classic", "classic")]
         e = c.get(f"/api/exports/{r.json()['export_id']}").json()

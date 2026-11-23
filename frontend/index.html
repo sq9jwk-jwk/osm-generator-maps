@@ -25,7 +25,11 @@
         <select id="style"></select>
       </section>
 
-      <section id="sec-output" class="disabled">
+      <section id="sec-generate" class="disabled">
+        <label><input id="gen-enable" type="checkbox" /> Generuj kafelki (włącza zaznaczanie obszaru)</label>
+      </section>
+
+      <section id="sec-output" class="disabled" hidden>
         <h2>3. Parametry wyjścia</h2>
         <div class="row">
           <label>Zoom wyjściowy <input id="max-zoom" type="number" min="0" max="20" value="14" /></label>
@@ -59,7 +63,7 @@
         </div>
       </section>
 
-      <section id="sec-select" class="disabled">
+      <section id="sec-select" class="disabled" hidden>
         <h2>4. Zaznaczanie obszaru</h2>
         <label>Siatka zaznaczania (zoom) <input id="grid-zoom" type="range" min="4" max="14" value="10" />
           <b id="grid-zoom-val">10</b></label>
@@ -126,6 +130,12 @@
         <p class="hint">Można dodać kilka prostokątów (nakładające się łączą się w jeden).
           Ograniczenie obszaru skraca import i zmniejsza zużycie pamięci. Wycinek zachowuje całe
           szlaki i obiekty na krawędzi.</p>
+      </div>
+      <div class="field">
+        <label><input id="import-search" type="checkbox" checked /> Zbuduj indeks wyszukiwania adresów
+          (ulice, kody pocztowe, miejscowości)</label>
+        <p class="hint">Wydłuża import o kilka sekund do kilku minut (zależnie od rozmiaru obszaru).
+          Bez indeksu pole wyszukiwania na mapie jest wyłączone, ale można go dobudować później.</p>
       </div>
       <div class="field">
         <b>Zobacz przed eksportem</b>

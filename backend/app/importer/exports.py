@@ -31,6 +31,7 @@ VECTOR = "vector.mbtiles"
 COVERAGE = "coverage.json"
 LOG = "import.log"
 META = "meta.json"
+SEARCH = "search.sqlite"
 FILES = (VECTOR, COVERAGE, LOG)
 
 
@@ -78,7 +79,9 @@ def scan_outputs() -> list[dict[str, Any]]:
 
 def with_usage(exp: dict[str, Any], outputs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Adds ``bytes`` (folder size) and ``outputs`` (number of rendered results)."""
-    exp["bytes"] = dir_size(export_dir(exp["map_id"], exp["id"]))
+    edir = export_dir(exp["map_id"], exp["id"])
+    exp["bytes"] = dir_size(edir)
+    exp["search"] = (edir / SEARCH).exists()
     if outputs is None:
         outputs = scan_outputs()
     exp["outputs"] = sum(1 for o in outputs if o.get("export_id") == exp["id"])

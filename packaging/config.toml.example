@@ -19,7 +19,12 @@ osmium_bin    = "osmium"
 store_on_disk = false
 coverage_zoom = 10
 
+[limits]
+# Heavy jobs (import, render) use at most this share of CPU cores, so the machine stays
+# usable. Sets tilemaker/render threads; postinst also writes a systemd CPUQuota from it.
+max_cpu_percent = 80
+
 [render]
 # "debug" draws z/x/y test tiles; "maplibre" = real rendering (after spike M0.5)
 engine  = "debug"
-threads = 0   # 0 = all CPU cores
+threads = 0   # 0 = derived from [limits] max_cpu_percent

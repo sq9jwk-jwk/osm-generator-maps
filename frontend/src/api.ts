@@ -15,6 +15,7 @@ export interface ExportInfo {
   created_at: number;
   bytes: number;
   outputs: number;
+  search: boolean;
 }
 
 /** A source: an uploaded .osm.pbf with the exports made from it. */
@@ -35,7 +36,7 @@ export interface DeleteResult { ok: boolean; freed_bytes: number; removed_output
 
 export interface Job {
   id: string;
-  kind: "import" | "render" | "sample";
+  kind: "import" | "render" | "sample" | "geocode";
   map_id: string | null;
   export_id: string | null;
   status: "queued" | "running" | "done" | "failed" | "cancelled";
@@ -69,8 +70,17 @@ export interface NewExport {
   profile: string;
   modules: string[] | null;
   bboxes: BBox[] | null;
+  search?: boolean;
 }
 
+export interface SearchHit {
+  kind: "place" | "street" | "postcode" | "address" | "poi";
+  label: string;
+  sub: string;
+  lon: number;
+  lat: number;
+  bbox: BBox | null;
+}
 export interface Coverage { zoom: number; tiles: [number, number][]; }
 export interface StyleInfo { id: string; name: string; profiles: string[]; }
 export interface ProfileInfo { id: string; name: string; description: string; }
@@ -108,6 +118,12 @@ export const api = {
   deleteExport: (id: string, outputs = false) =>
     req<DeleteResult>("DELETE", `/api/exports/${id}?outputs=${outputs}`),
   exportLog: (id: string) => req<{ log: string }>("GET", `/api/exports/${id}/log`),
+  search: async (exportId: string, q: string, limit = 8, signal?: AbortSignal): Promise<SearchHit[]> => {
+    const res = await fetch(`/api/exports/${exportId}/search?q=${encodeURIComponent(q)}&limit=${limit}`, { signal });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `${res.status}`);
+    return res.json();
+  },
+  buildSearch: (exportId: string) => req<{ job_id: string }>("POST", `/api/exports/${exportId}/search/index`),
   coverage: (exportId: string) => req<Coverage>("GET", `/api/exports/${exportId}/coverage`),
   createSample: (id: string, profile: string, bbox: BBox, modules: string[] | null = null) =>
     req<{ job_id: string; bbox: BBox }>("POST", `/api/maps/${id}/sample`, { profile, bbox, modules }),

@@ -14,6 +14,7 @@ from ..core.config import get_settings
 from ..importer import exports, modules as modules_mod
 from ..importer.profiles import get_profile
 from ..importer.tilemaker import extract_region, run_tilemaker
+from ..osm import search as search_mod
 from ..osm.analyze import coverage_from_mbtiles, read_bbox
 from ..render.base import FORMATS, RenderRequest, encode, get_engine
 from ..tiles import xyz
@@ -129,6 +130,16 @@ def handle_import(job: dict[str, Any]) -> None:
                 json.dumps({"zoom": settings.coverage_zoom, "tiles": tiles}), encoding="utf-8"
             )
             emit(f"coverage: {len(tiles)} tiles at z{settings.coverage_zoom}")
+
+            if params.get("search", True):  # a failed index never fails the export itself
+                queue.update(job["id"], progress=0.97, message="Indeks wyszukiwania adresów")
+                try:
+                    n = build_export_search(job, map_id, export_id, areas, emit)
+                    emit(f"search index: {n} items")
+                except InterruptedError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    emit(f"search index failed: {exc}")
     except BaseException:
         # Keep the folder and its log (the user can read what went wrong), drop partial results.
         for leftover in (out, cov, out.with_suffix(".tmp.mbtiles")):
@@ -139,6 +150,48 @@ def handle_import(job: dict[str, Any]) -> None:
     exports.write_meta(edir, {**exp, "bbox": bbox})
     with db.connect() as c:  # remember the file's extent on the source as well
         c.execute("UPDATE maps SET bbox = COALESCE(bbox, ?) WHERE id = ?", (json.dumps(bbox) if bbox else None, map_id))
+
+
+def build_export_search(
+    job: dict[str, Any], map_id: str, export_id: str, areas: list[list[float]] | None, emit: Any
+) -> int:
+    """(Re)build ``search.sqlite`` of an export from the source PBF (cut to the export's area)."""
+    settings = get_settings()
+    if shutil.which(settings.osmium_bin) is None:
+        raise RuntimeError("Brak programu osmium (apt install osmium-tool)")
+    mdir = map_dir(map_id)
+    edir = exports.export_dir(map_id, export_id)
+    source = mdir / "source.osm.pbf"
+    if not source.exists():
+        raise RuntimeError("Brak pliku źródłowego PBF (został usunięty), nie można zbudować indeksu")
+    cancel = lambda: queue.is_cancel_requested(job["id"])  # noqa: E731
+    region = edir / "search.region.tmp.osm.pbf"
+    try:
+        pbf = source
+        if areas:
+            extract_region(settings, source, region, [tuple(a) for a in areas], edir, emit, cancel)  # type: ignore[arg-type]
+            pbf = region
+        return search_mod.build_index(pbf, edir / search_mod.INDEX_NAME, settings.osmium_bin, edir, emit, cancel)
+    finally:
+        region.unlink(missing_ok=True)
+        (edir / "region.tmp.geojson").unlink(missing_ok=True)
+
+
+def handle_geocode(job: dict[str, Any]) -> None:
+    """Build the address search index of an existing export."""
+    exp = exports.get_export(job["export_id"]) if job.get("export_id") else None
+    if exp is None:
+        raise RuntimeError("Eksport nie istnieje")
+    edir = exports.export_dir(job["map_id"], exp["id"])
+    queue.update(job["id"], progress=0.1, message="Budowanie indeksu wyszukiwania")
+    with (edir / "search.log").open("w", encoding="utf-8") as lf:
+        def emit(line: str) -> None:
+            lf.write(line + "\n")
+            lf.flush()
+
+        n = build_export_search(job, job["map_id"], exp["id"], exp.get("regions"), emit)
+        emit(f"index: {n} items")
+    queue.update(job["id"], message=f"Zindeksowano {n} pozycji")
 
 
 def handle_sample(job: dict[str, Any]) -> None:
@@ -238,7 +291,9 @@ def handle_render(job: dict[str, Any]) -> None:
     (root / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
-HANDLERS = {"import": handle_import, "render": handle_render, "sample": handle_sample}
+HANDLERS = {
+    "import": handle_import, "render": handle_render, "sample": handle_sample, "geocode": handle_geocode,
+}
 
 
 def _import_failed(job: dict[str, Any], message: str) -> None:

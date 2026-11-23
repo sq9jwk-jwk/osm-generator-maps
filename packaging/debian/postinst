@@ -10,6 +10,14 @@ if [ "$1" = "configure" ]; then
     if [ ! -f /etc/osm-tilegen/config.toml ]; then
         install -D -m 0644 /usr/share/osm-tilegen/config.toml.example /etc/osm-tilegen/config.toml
     fi
+    # CPU cap for the worker: max_cpu_percent (default 80) of all cores, as a systemd quota.
+    pct=$(sed -n 's/^max_cpu_percent *= *\([0-9]*\).*/\1/p' /etc/osm-tilegen/config.toml | head -n1)
+    case "$pct" in ''|*[!0-9]*) pct=80 ;; esac
+    [ "$pct" -ge 1 ] && [ "$pct" -le 100 ] || pct=80
+    cores=$(nproc 2>/dev/null || echo 1)
+    install -d /etc/systemd/system/osm-tilegen-worker.service.d
+    printf '[Service]\nCPUQuota=%s%%\n' "$((cores * pct))" \
+        > /etc/systemd/system/osm-tilegen-worker.service.d/limits.conf
     systemctl daemon-reload || true
     systemctl enable --now osm-tilegen.service osm-tilegen-worker.service || true
 fi

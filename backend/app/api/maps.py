@@ -177,6 +177,8 @@ class ExportRequest(BaseModel):
     modules: list[str] | None = None
     # rectangles [west, south, east, north]; None or empty = whole file
     bboxes: list[list[float]] | None = None
+    # build the offline address search index together with the export
+    search: bool = True
 
 
 def _default_name(profile: str, modules: list[str] | None, areas: list[list[float]] | None) -> str:
@@ -215,7 +217,7 @@ def create_export(map_id: str, body: ExportRequest) -> dict[str, str]:
     ex.export_dir(map_id, exp_id).mkdir(parents=True, exist_ok=True)
     job_id = queue.enqueue(
         "import",
-        {"profile": body.profile, "modules": mods, "regions": areas},
+        {"profile": body.profile, "modules": mods, "regions": areas, "search": body.search},
         map_id=map_id,
         export_id=exp_id,
     )

@@ -25,6 +25,7 @@ def build_command(
         cmd += ["--config", str(config)]
     if process:
         cmd += ["--process", str(process)]
+    cmd += ["--threads", str(settings.worker_threads)]
     if settings.tilemaker_store:
         store_dir.mkdir(parents=True, exist_ok=True)
         cmd += ["--store", str(store_dir)]

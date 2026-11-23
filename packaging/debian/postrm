@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 if [ "$1" = "purge" ]; then
-    rm -rf /etc/osm-tilegen
+    rm -rf /etc/osm-tilegen /etc/systemd/system/osm-tilegen-worker.service.d
     # Maps and generated tiles are kept on purpose (can be many GB of user work).
     echo "osm-tilegen: dane w /var/lib/osm-tilegen pozostawiono. Usuń ręcznie, jeśli nie są potrzebne."
     systemctl daemon-reload || true

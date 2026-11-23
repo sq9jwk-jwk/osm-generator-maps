@@ -67,7 +67,7 @@ def test_modules_endpoint_and_export_request():
         assert r.status_code == 200, r.text
         with db.connect() as con:
             params = json.loads(con.execute("SELECT params FROM jobs WHERE id = ?", (r.json()["job_id"],)).fetchone()[0])
-        assert params == {"profile": "custom", "modules": ["poi", "hiking"], "regions": None}
+        assert params == {"profile": "custom", "modules": ["poi", "hiking"], "regions": None, "search": True}
         e = c.get(f"/api/exports/{r.json()['export_id']}").json()
         assert e["modules"] == ["poi", "hiking"] and e["name"] == "Własny (2 elem.) · cały plik"
         bad = c.post(f"/api/maps/{map_id}/exports", json={"profile": "custom", "modules": ["x"]})

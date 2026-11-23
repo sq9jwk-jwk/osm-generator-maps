@@ -17,6 +17,20 @@ export class SelectionGrid {
   private dragStart: { x: number; y: number; remove: boolean } | null = null;
   private box: HTMLDivElement | null = null;
   onChange: () => void = () => {};
+  /** When false the grid is hidden and ignores mouse input (browse-only mode). */
+  private active = false;
+
+  /** Set while another map tool (distance measuring) owns the mouse. */
+  blocked = false;
+
+  setActive(on: boolean) {
+    this.active = on;
+    this.dragStart = null;
+    this.box?.remove();
+    this.box = null;
+    this.map.dragPan.enable();
+    this.redraw();
+  }
 
   constructor(private map: MlMap) {
     map.boxZoom.disable();
@@ -106,7 +120,7 @@ export class SelectionGrid {
     const [x1, y1] = lonLatToTile(b.getEast(), b.getSouth(), z);
     const n = (x1 - x0 + 1) * (y1 - y0 + 1);
     const features: GeoJSON.Feature[] = [];
-    if (n <= MAX_CELLS) {
+    if (this.active && n <= MAX_CELLS) {
       for (let x = x0; x <= x1; x++)
         for (let y = y0; y <= y1; y++)
           features.push({
@@ -119,7 +133,7 @@ export class SelectionGrid {
   }
 
   private onClick(e: MapMouseEvent) {
-    if (e.originalEvent.shiftKey || e.originalEvent.altKey || !this.coverage) return;
+    if (!this.active || this.blocked || e.originalEvent.shiftKey || e.originalEvent.altKey || !this.coverage) return;
     const [x, y] = lonLatToTile(e.lngLat.lng, e.lngLat.lat, this.gridZ);
     if (!this.isCovered(x, y)) return;
     const k = key(x, y);
@@ -130,7 +144,7 @@ export class SelectionGrid {
 
   private onDown(e: MapMouseEvent) {
     const ev = e.originalEvent;
-    if (!(ev.shiftKey || ev.altKey) || !this.coverage) return;
+    if (!this.active || this.blocked || !(ev.shiftKey || ev.altKey) || !this.coverage) return;
     e.preventDefault();
     this.map.dragPan.disable();
     this.dragStart = { x: e.point.x, y: e.point.y, remove: ev.altKey };
