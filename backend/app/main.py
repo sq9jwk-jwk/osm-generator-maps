@@ -51,8 +51,17 @@ _settings = get_settings()
 if _settings.styles_dir.exists():
     app.mount("/styles", StaticFiles(directory=_settings.styles_dir), name="styles")
 
+class _UiFiles(StaticFiles):
+    """UI files revalidate on every load (ETag), so a rebuilt UI is never hidden by browser cache."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 if (_settings.frontend_dist / "index.html").exists():
-    app.mount("/", StaticFiles(directory=_settings.frontend_dist, html=True), name="ui")
+    app.mount("/", _UiFiles(directory=_settings.frontend_dist, html=True), name="ui")
 else:
     @app.get("/", response_class=HTMLResponse)
     def no_ui() -> str:
