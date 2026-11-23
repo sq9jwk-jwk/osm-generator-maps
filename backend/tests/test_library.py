@@ -445,3 +445,28 @@ def test_merge_bboxes_joins_overlapping_only():
     a, b, far = (0, 0, 2, 2), (1, 1, 3, 3), (10, 10, 11, 11)
     assert sorted(merge_bboxes([a, b, far])) == [(0, 0, 3, 3), (10, 10, 11, 11)]
     assert outline([a, far]) == (0, 0, 11, 11)
+
+
+def _zoom_curves(node) -> int:
+    """Number of zoom-based interpolate/step expressions inside one property value."""
+    if not isinstance(node, list):
+        return 0
+    n = 0
+    if node and node[0] in ("interpolate", "interpolate-hcl", "interpolate-lab") and ["zoom"] in node:
+        n += 1
+    if node and node[0] == "step" and len(node) > 1 and node[1] == ["zoom"]:
+        n += 1
+    return n + sum(_zoom_curves(x) for x in node)
+
+
+def test_styles_have_at_most_one_zoom_curve_per_property():
+    """MapLibre refuses the whole style (and the map keeps the previous one) otherwise."""
+    s = get_settings()
+    for d in s.styles_dir.iterdir():
+        f = d / "style.json"
+        if not f.is_file():
+            continue
+        for layer in json.loads(f.read_text(encoding="utf-8"))["layers"]:
+            for group in ("paint", "layout"):
+                for prop, value in layer.get(group, {}).items():
+                    assert _zoom_curves(value) <= 1, (d.name, layer["id"], prop)

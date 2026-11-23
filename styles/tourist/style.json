@@ -420,39 +420,53 @@
       "paint": {
         "line-color": "#bdbdcc",
         "line-width": [
-          "case",
+          "interpolate",
           [
-            "==",
-            [
-              "get",
-              "subclass"
-            ],
-            "runway"
+            "linear"
           ],
           [
-            "interpolate",
+            "zoom"
+          ],
+          10,
+          [
+            "case",
             [
-              "linear"
+              "==",
+              [
+                "get",
+                "subclass"
+              ],
+              "runway"
             ],
-            [
-              "zoom"
-            ],
-            10,
             1,
-            16,
-            14
+            0.5
           ],
+          12,
           [
-            "interpolate",
+            "case",
             [
-              "linear"
+              "==",
+              [
+                "get",
+                "subclass"
+              ],
+              "runway"
             ],
+            5.33,
+            0.5
+          ],
+          16,
+          [
+            "case",
             [
-              "zoom"
+              "==",
+              [
+                "get",
+                "subclass"
+              ],
+              "runway"
             ],
-            12,
-            0.5,
-            16,
+            14,
             5
           ]
         ]
