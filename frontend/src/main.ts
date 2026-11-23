@@ -4,7 +4,7 @@ import "./style.css";
 import {
   api, uploadPbf,
   type BBox, type Job, type MapContents, type MapInfo, type MapPart, type OutputInfo,
-  type ProfileInfo, type StyleInfo,
+  type ModuleInfo, type ProfileInfo, type StyleInfo,
 } from "./api";
 import { SelectionGrid } from "./grid";
 import { estimateBytes, formatBytes, regrid } from "./tiles";
@@ -26,6 +26,7 @@ const grid = new SelectionGrid(map);
 let current: MapInfo | null = null;
 let maps: MapInfo[] = [];
 let profiles: ProfileInfo[] = [];
+let moduleCatalogue: ModuleInfo[] = [];
 let styles: StyleInfo[] = [];
 
 function toast(msg: string) {
@@ -267,7 +268,8 @@ function detailRow(m: MapInfo): HTMLTableRowElement {
     item(p.label, p.bytes, ...btns);
   }
   for (const i of c.imports) {
-    const name = profiles.find((p) => p.id === i.profile)?.name ?? i.profile ?? "?";
+    const baseName = profiles.find((p) => p.id === i.profile)?.name ?? i.profile ?? "?";
+    const name = i.profile === "custom" && i.modules ? `${baseName}: ${i.modules.length} elem.` : baseName;
     const btns: HTMLButtonElement[] = [];
     if (!busy) {
       btns.push(actionButton("Użyj", async () => {
@@ -333,7 +335,8 @@ function renderLibrary() {
     const profileName = profiles.find((p) => p.id === m.profile)?.name ?? m.profile;
     const note = document.createElement("div");
     note.className = "muted";
-    note.textContent = `profil: ${profileName}${m.region ? " · wycinek" : ""}`;
+    const modNote = m.profile === "custom" && m.modules ? ` (${m.modules.length} elem.)` : "";
+    note.textContent = `profil: ${profileName}${modNote}${m.region ? " · wycinek" : ""}`;
     areaCell.append(note);
     const open = expanded.has(m.id);
     const toggle = actionButton(open ? "▾" : "▸", () => {
@@ -387,16 +390,43 @@ let importRect: BBox | null = null;
 let sampleMode: { mapId: string; profile: string } | null = null;
 
 const importProfile = () => $<HTMLSelectElement>("import-profile").value;
+/** Modules ticked in the dialog; null unless the "custom" profile is selected. */
+const importModules = (): string[] | null => importProfile() !== "custom" ? null :
+  [...document.querySelectorAll<HTMLInputElement>("#import-modules input:checked")].map((i) => i.value);
+
+function renderModules(checked: string[] | null) {
+  const box = $("import-modules");
+  box.innerHTML = "";
+  for (const m of moduleCatalogue) {
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = m.id;
+    cb.checked = checked ? checked.includes(m.id) : m.default;
+    cb.addEventListener("change", updateImportUi);
+    const desc = document.createElement("span");
+    desc.className = "muted";
+    desc.textContent = ` ${m.description}`;
+    label.append(cb, ` ${m.name}`, desc);
+    box.append(label);
+  }
+}
+
 const areaMode = () =>
   (document.querySelector<HTMLInputElement>('input[name="import-area"]:checked')?.value ?? "all");
 const setArea = (v: "all" | "rect") =>
   (document.querySelector<HTMLInputElement>(`input[name="import-area"][value="${v}"]`)!.checked = true);
 
+const sameModules = (a: string[] | null, b: string[] | null) =>
+  [...(a ?? [])].sort().join() === [...(b ?? [])].sort().join();
+
 function updateImportUi() {
+  $("import-modules").hidden = importProfile() !== "custom";
   $("import-profile-desc").textContent = profiles.find((p) => p.id === importProfile())?.description ?? "";
   // Merging only makes sense into a partial import made with the same profile.
   const canMerge = !!importTarget && importTarget.status === "ready" && !!importTarget.region &&
-    importTarget.profile === importProfile() && areaMode() === "rect";
+    importTarget.profile === importProfile() && areaMode() === "rect" &&
+    (importProfile() !== "custom" || sameModules(importTarget.modules, importModules()));
   $("import-merge-row").hidden = !canMerge;
   $("import-bbox").textContent = importRect ? importRect.map((v) => v.toFixed(3)).join("  ") : "";
 }
@@ -407,10 +437,12 @@ async function openImportDialog(m: MapInfo) {
   if (!profiles.length) {
     try { profiles = await api.profiles(); } catch (e) { return toast(String(e)); }
   }
+  if (!moduleCatalogue.length) moduleCatalogue = await api.modules().catch(() => []);
   const sel = $<HTMLSelectElement>("import-profile");
   sel.innerHTML = "";
   for (const p of profiles) sel.add(new Option(p.name, p.id));
   sel.value = profiles.some((p) => p.id === m.profile) ? m.profile : profiles[0]?.id ?? "";
+  renderModules(m.profile === "custom" ? m.modules : null);
   setArea(m.region ? "rect" : "all");
   $("import-title").textContent = `Import: ${m.name}`;
   updateImportUi();
@@ -492,7 +524,7 @@ $("import-start").addEventListener("click", async () => {
   if (m.status === "ready" && !merge &&
       !confirm("Nowy import stanie się aktywny, a obecny trafi do archiwum tej mapy (można go później przywrócić). Nic nie jest usuwane. Kontynuować?")) return;
   try {
-    await api.importMap(m.id, importProfile(), bbox, merge);
+    await api.importMap(m.id, importProfile(), bbox, merge, importModules());
     importDlg.close();
     toast("Import dodany do kolejki");
     await refreshMaps();
@@ -540,7 +572,7 @@ $("import-sample").addEventListener("click", async () => {
   btn.textContent = "Generowanie próbki…";
   try {
     await api.deleteSample(m.id);
-    const { job_id, bbox } = await api.createSample(m.id, profile, sampleBBox(m));
+    const { job_id, bbox } = await api.createSample(m.id, profile, sampleBBox(m), importModules());
     void refreshJobs();
     const job = await waitForJob(job_id);
     if (job.status !== "done") throw new Error(job.message ?? "Nie udało się wygenerować próbki");
@@ -583,9 +615,11 @@ $<HTMLInputElement>("file").addEventListener("change", async (ev) => {
   const prog = $("upload-progress");
   try {
     const res = await uploadPbf(file, (p) => (prog.textContent = `Wysyłanie ${file.name}: ${(p * 100).toFixed(1)}%`));
-    prog.textContent = "Wysłano. Trwa import (zobacz Zadania).";
+    prog.textContent = "Wysłano. Wybierz profil i obszar, a potem uruchom import.";
     await refreshMaps();
     await selectMap(res.map_id);
+    const uploaded = maps.find((m) => m.id === res.map_id);
+    if (uploaded) await openImportDialog(uploaded);
   } catch (e) {
     prog.textContent = "";
     toast(`Błąd wysyłania: ${e}`);

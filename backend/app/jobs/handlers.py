@@ -11,7 +11,7 @@ from typing import Any
 
 from .. import db
 from ..core.config import get_settings
-from ..importer import archive, regions as regions_mod
+from ..importer import archive, modules as modules_mod, regions as regions_mod
 from ..importer.profiles import DEFAULT_PROFILE, get_profile
 from ..importer.tilemaker import extract_region, run_tilemaker
 from ..osm.analyze import coverage_from_mbtiles, read_bbox
@@ -42,6 +42,7 @@ def _tilemaker_with_profile(
     profile_id: str,
     areas: list[list[float]] | None,
     source: Path,
+    modules: list[str] | None = None,
 ) -> None:
     """(Optional) cut ``areas`` (rectangles) out of ``source` and run tilemaker with the profile into ``out``."""
     settings = get_settings()
@@ -51,7 +52,12 @@ def _tilemaker_with_profile(
     cancel = lambda: queue.is_cancel_requested(job["id"])  # noqa: E731
     pbf = source
     region_pbf = mdir / "region.tmp.osm.pbf"
+    config, process = profile.config, profile.process
+    generated: list[Path] = []
     try:
+        if profile.id == modules_mod.CUSTOM_PROFILE:
+            config, process = modules_mod.build(profile.config, profile.process, modules or [], mdir)
+            generated = [config, process]
         if areas:
             if shutil.which(settings.osmium_bin) is None:
                 raise RuntimeError("Brak programu osmium (apt install osmium-tool)")
@@ -64,12 +70,14 @@ def _tilemaker_with_profile(
         tmp = out.with_suffix(".tmp.mbtiles")
         tmp.unlink(missing_ok=True)
         run_tilemaker(
-            settings, pbf, tmp, mdir, emit, cancel, config=profile.config, process=profile.process
+            settings, pbf, tmp, mdir, emit, cancel, config=config, process=process
         )
         tmp.replace(out)
     finally:
         region_pbf.unlink(missing_ok=True)
         (mdir / "region.tmp.geojson").unlink(missing_ok=True)
+        for g in generated:
+            g.unlink(missing_ok=True)
 
 
 def handle_import(job: dict[str, Any]) -> None:
@@ -78,6 +86,7 @@ def handle_import(job: dict[str, Any]) -> None:
     map_id = job["map_id"]
     params = job.get("params") or {}
     profile_id = params.get("profile", DEFAULT_PROFILE)
+    modules = params.get("modules") if profile_id == modules_mod.CUSTOM_PROFILE else None
     areas = params.get("regions") or ([params["region"]] if params.get("region") else None)
     if areas:
         areas = [list(b) for b in regions_mod.merge_bboxes([tuple(a) for a in areas])]
@@ -97,14 +106,14 @@ def handle_import(job: dict[str, Any]) -> None:
                 lf.write(line + "\n")
                 lf.flush()
 
-            emit(f"profile: {profile_id}, areas: {areas}")
+            emit(f"profile: {profile_id}, modules: {modules}, areas: {areas}")
             queue.update(job["id"], progress=0.05, message="Odczyt zasięgu pliku")
             if shutil.which(settings.osmium_bin) is None:
                 raise RuntimeError("Brak programu osmium (apt install osmium-tool)")
             bbox = read_bbox(pbf, settings.osmium_bin)
             emit(f"bbox: {bbox}")
 
-            _tilemaker_with_profile(job, mdir, emit, out, profile_id, areas, pbf)
+            _tilemaker_with_profile(job, mdir, emit, out, profile_id, areas, pbf, modules)
 
             queue.update(job["id"], progress=0.95, message="Maska pokrycia")
             tiles = coverage_from_mbtiles(out, settings.coverage_zoom)
@@ -127,13 +136,14 @@ def handle_import(job: dict[str, Any]) -> None:
     out.replace(mdir / archive.VECTOR)
     cov_new.replace(mdir / archive.COVERAGE)
     logfile.replace(mdir / archive.LOG)
-    archive.write_active_meta(mdir, profile_id, region, bbox, areas)
+    archive.write_active_meta(mdir, profile_id, region, bbox, areas, modules)
     _set_map(
         map_id,
         status="ready",
         message=None,
         bbox=json.dumps(bbox) if bbox else None,
         profile=profile_id,
+        modules=json.dumps(modules) if modules is not None else None,
         region=json.dumps(region) if region else None,
         regions=json.dumps(areas) if areas else None,
     )
@@ -155,10 +165,11 @@ def handle_sample(job: dict[str, Any]) -> None:
             lf.flush()
 
         _tilemaker_with_profile(
-            job, mdir, emit, out, params["profile"], [params["bbox"]], mdir / "source.osm.pbf"
+            job, mdir, emit, out, params["profile"], [params["bbox"]], mdir / "source.osm.pbf",
+            params.get("modules"),
         )
     (mdir / "sample.json").write_text(
-        json.dumps({"profile": params["profile"], "bbox": params["bbox"]}), encoding="utf-8"
+        json.dumps({"profile": params["profile"], "bbox": params["bbox"], "modules": params.get("modules")}), encoding="utf-8"
     )
 
 

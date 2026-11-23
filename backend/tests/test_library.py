@@ -70,7 +70,7 @@ def test_profiles_endpoint_and_style_requirements():
         assert {"classic", "tourist"} <= names
         styles = {s["id"]: s for s in c.get("/api/styles").json()}
         assert styles["basic"]["profiles"] == []
-        assert styles["tourist"]["profiles"] == ["tourist"]
+        assert styles["tourist"]["profiles"] == ["tourist", "custom"]
 
 
 def test_import_with_profile_and_region_enqueues_job():
@@ -82,7 +82,7 @@ def test_import_with_profile_and_region_enqueues_job():
         assert job["kind"] == "import"
         with db.connect() as conn:
             params = json.loads(conn.execute("SELECT params FROM jobs WHERE id = ?", (job["id"],)).fetchone()[0])
-        assert params == {"profile": "tourist", "regions": [[19.0, 49.5, 19.5, 49.8]]}
+        assert params == {"profile": "tourist", "modules": None, "regions": [[19.0, 49.5, 19.5, 49.8]]}
         # a second import while the first is queued is refused
         assert c.post(f"/api/maps/{map_id}/import", json={"profile": "classic"}).status_code == 409
 
@@ -233,7 +233,7 @@ def test_sample_handler_leaves_map_untouched(monkeypatch):
         handlers.run_job(job)
         mdir = get_settings().maps_dir / map_id
         assert (mdir / "sample.mbtiles").exists()
-        assert json.loads((mdir / "sample.json").read_text()) == {"profile": "tourist", "bbox": bbox}
+        assert json.loads((mdir / "sample.json").read_text()) == {"profile": "tourist", "bbox": bbox, "modules": None}
         m = c.get(f"/api/maps/{map_id}").json()
         assert m["status"] == "ready" and m["profile"] == "classic"
 

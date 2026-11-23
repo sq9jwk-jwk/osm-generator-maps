@@ -65,8 +65,9 @@ def test_chunked_upload_flow():
         assert r.status_code == 200, r.text
         map_id = r.json()["map_id"]
         assert c.get(f"/api/maps/{map_id}").json()["status"] == "uploaded"
+        # uploading must not start an import by itself
         jobs = c.get("/api/jobs").json()
-        assert any(j["map_id"] == map_id and j["kind"] == "import" for j in jobs)
+        assert not any(j["map_id"] == map_id for j in jobs)
 
 
 def test_reject_wrong_extension_and_content():

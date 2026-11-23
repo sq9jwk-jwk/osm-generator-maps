@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from .. import db
 from ..core.config import get_settings
 from ..importer import archive
+from ..importer import modules as modules_mod
 from ..importer.profiles import DEFAULT_PROFILE, get_profile, list_profiles
 from ..jobs import queue
 from ..osm.analyze import looks_like_pbf
@@ -241,10 +242,11 @@ def activate_import(map_id: str, imp_id: str) -> dict[str, Any]:
         except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(404, "Nie ma takiego importu") from exc
         c.execute(
-            "UPDATE maps SET status = 'ready', message = NULL, profile = ?, region = ?,"
+            "UPDATE maps SET status = 'ready', message = NULL, profile = ?, modules = ?, region = ?,"
             " regions = ?, bbox = COALESCE(?, bbox) WHERE id = ?",
             (
                 meta.get("profile") or DEFAULT_PROFILE,
+                json.dumps(meta["modules"]) if meta.get("modules") is not None else None,
                 json.dumps(meta["region"]) if meta.get("region") else None,
                 json.dumps(meta["regions"]) if meta.get("regions") else None,
                 json.dumps(meta["bbox"]) if meta.get("bbox") else None,
@@ -271,6 +273,8 @@ def delete_archived_import(map_id: str, imp_id: str) -> dict[str, Any]:
 
 class ImportRequest(BaseModel):
     profile: str = DEFAULT_PROFILE
+    # only for profile 'custom': ids of the enabled modules (default set when omitted)
+    modules: list[str] | None = None
     # [west, south, east, north]; None = whole file
     bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
     # add ``bbox`` to the areas the map's current import already covers (same profile)
@@ -298,6 +302,24 @@ def _check_profile(profile: str) -> None:
         raise HTTPException(400, str(exc)) from exc
 
 
+def _import_modules(profile: str, modules: list[str] | None) -> list[str] | None:
+    """Modules only exist for the 'custom' profile; validated and put in catalogue order."""
+    if profile != modules_mod.CUSTOM_PROFILE:
+        return None
+    try:
+        return modules_mod.normalize(modules)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/modules")
+def modules_catalogue() -> list[dict[str, Any]]:
+    return [
+        {"id": m.id, "name": m.name, "description": m.description, "default": m.default}
+        for m in modules_mod.MODULES
+    ]
+
+
 @router.get("/profiles")
 def profiles() -> list[dict[str, str]]:
     return [
@@ -313,6 +335,7 @@ def import_map(map_id: str, body: ImportRequest) -> dict[str, str]:
     if not (get_settings().maps_dir / map_id / SOURCE_NAME).exists():
         raise HTTPException(409, "Brak pliku źródłowego")
     _check_profile(body.profile)
+    mods = _import_modules(body.profile, body.modules)
     region = _validated_bbox(body.bbox)
     areas = [region] if region else None
     if body.merge:
@@ -320,14 +343,16 @@ def import_map(map_id: str, body: ImportRequest) -> dict[str, str]:
         current = m.get("regions") or ([m["region"]] if m.get("region") else None)
         if region is None:
             raise HTTPException(400, "Scalanie wymaga wskazania obszaru")
-        if m["status"] == "ready" and m.get("profile") == body.profile:
+        if m["status"] == "ready" and m.get("profile") == body.profile and m.get("modules") == mods:
             if current is None:
                 raise HTTPException(409, "Obecny import obejmuje już cały plik")
             areas = [*current, region]
     with db.connect() as c:
         _ensure_idle(c, map_id)
         c.execute("UPDATE maps SET status = 'uploaded', message = NULL WHERE id = ?", (map_id,))
-    job_id = queue.enqueue("import", {"profile": body.profile, "regions": areas}, map_id=map_id)
+    job_id = queue.enqueue(
+        "import", {"profile": body.profile, "modules": mods, "regions": areas}, map_id=map_id
+    )
     return {"job_id": job_id}
 
 
@@ -335,7 +360,8 @@ def import_map(map_id: str, body: ImportRequest) -> dict[str, str]:
 def reimport_map(map_id: str) -> dict[str, str]:
     """Repeat the import with the profile and area the map already has."""
     m = _get_map(map_id)
-    _check_profile(m.get("profile") or DEFAULT_PROFILE)
+    profile = m.get("profile") or DEFAULT_PROFILE
+    _check_profile(profile)
     if not (get_settings().maps_dir / map_id / SOURCE_NAME).exists():
         raise HTTPException(409, "Brak pliku źródłowego")
     areas = m.get("regions") or ([m["region"]] if m.get("region") else None)
@@ -343,7 +369,9 @@ def reimport_map(map_id: str) -> dict[str, str]:
         _ensure_idle(c, map_id)
         c.execute("UPDATE maps SET status = 'uploaded', message = NULL WHERE id = ?", (map_id,))
     job_id = queue.enqueue(
-        "import", {"profile": m.get("profile") or DEFAULT_PROFILE, "regions": areas}, map_id=map_id
+        "import",
+        {"profile": profile, "modules": _import_modules(profile, m.get("modules")), "regions": areas},
+        map_id=map_id,
     )
     return {"job_id": job_id}
 
@@ -359,6 +387,7 @@ def create_sample(map_id: str, body: ImportRequest) -> dict[str, Any]:
     if not (get_settings().maps_dir / map_id / SOURCE_NAME).exists():
         raise HTTPException(409, "Brak pliku źródłowego")
     _check_profile(body.profile)
+    mods = _import_modules(body.profile, body.modules)
     bbox = _validated_bbox(body.bbox, SAMPLE_MAX_SPAN)
     if bbox is None:
         raise HTTPException(400, "Próbka wymaga obszaru")
@@ -370,7 +399,9 @@ def create_sample(map_id: str, body: ImportRequest) -> dict[str, Any]:
         ).fetchone()
         if busy:
             raise HTTPException(409, "Próbka jest już generowana")
-    job_id = queue.enqueue("sample", {"profile": body.profile, "bbox": bbox}, map_id=map_id)
+    job_id = queue.enqueue(
+        "sample", {"profile": body.profile, "modules": mods, "bbox": bbox}, map_id=map_id
+    )
     return {"job_id": job_id, "bbox": bbox}
 
 
@@ -485,8 +516,8 @@ def complete_upload(upload_id: str) -> dict[str, Any]:
             (map_id, name, u["filename"], u["size_bytes"], db.now()),
         )
         c.execute("DELETE FROM uploads WHERE id = ?", (upload_id,))
-    job_id = queue.enqueue("import", {}, map_id=map_id)
-    return {"map_id": map_id, "job_id": job_id}
+    # No automatic import: the user picks profile, modules and area first (POST /maps/{id}/import).
+    return {"map_id": map_id}
 
 
 # ------------------------------------------------------------------ selections

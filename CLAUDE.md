@@ -324,6 +324,12 @@ osm-tilegen/
   obszarów obecnego importu (ten sam profil). Mapa pamięta `regions` (lista prostokątów) i
   `region` (obrys). `osmium extract` dostaje jeden `--bbox` albo `--polygon` (MultiPolygon z
   rozłącznych prostokątów), a import przebudowuje całość; stary trafia do archiwum.
+- **Profil `custom` (moduły do wyboru)** (`importer/modules.py`, `tilemaker/profiles/custom/`): UI pokazuje checkboxy
+  (`GET /api/modules`), import przyjmuje `modules` (tylko dla `profile=custom`). `process.lua` to szablon z flagami
+  `M.<moduł>`; przy imporcie backend dopisuje `MODULES = {...}` i generuje `config.json` tylko z potrzebnymi warstwami
+  (warstwa w Lua musi być w configu, test pilnuje zgodności). Zawsze: drogi, woda, cieki, landcover. Moduły zapisują się
+  w `maps.modules` i `import.json`/`meta.json` archiwum. Logika zduplikowana z classic/tourist: zmiany w obu miejscach.
+  Nie testowane z prawdziwym tilemakerem.
 - Wciąż brak: poligonów mórz (shapefile do tilemakera); równoległych importów jednej mapy (jeden aktywny). Profil `tourist` nie rozszerza `full`.
 
 **Następne kroki:**

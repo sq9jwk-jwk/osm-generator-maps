@@ -52,3 +52,7 @@ button.primary-inline { background: #2563eb; color: #fff; border: 0; border-radi
   align-items: center; background: #fff; border: 1px solid #2563eb; border-radius: 6px; padding: 8px 12px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .25); }
 [hidden] { display: none !important; }
+
+#import-dlg .modules { display: grid; gap: 3px; margin-top: 6px; max-height: 260px; overflow-y: auto;
+  padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; }
+#import-dlg .modules label { font-size: 13px; }
