@@ -267,9 +267,9 @@ osm-tilegen/
   przez `.part`).
 - Maska pokrycia jest liczona z indeksu kafelków MBTiles tilemakera, a nie
   przez skanowanie węzłów w Pythonie (za wolne dla dużych plików).
-- Podgląd: `/api/maps/{id}/tiles/{z}/{x}/{y}.pbf` oraz
-  `/api/maps/{id}/style/{style}.json` (style z przepisanymi źródłami, glifami i
-  sprite'ami na lokalne URL-e).
+- Podgląd: `/api/exports/{id}/tiles/{z}/{x}/{y}.pbf?v=<mtime>` oraz
+  `/api/exports/{id}/style/{style}.json` (style z przepisanymi źródłami, glifami i
+  sprite'ami na lokalne URL-e; `?v=` unieważnia cache przeglądarki po nowym eksporcie).
 - Styl wbudowany `styles/basic` (schemat OpenMapTiles, bez etykiet, więc nie
   potrzebuje fontów).
 - Silnik `debug` (ramka + z/x/y) pozwala testować cały pipeline end-to-end.
@@ -280,20 +280,29 @@ osm-tilegen/
 
 **Biblioteka map i profile importu** (po M0, przed etykietami):
 
-- Okno „Zarządzaj mapami…”: rozwijana lista zawartości mapy (PBF, dane importu,
-  log, każdy wynik osobno) z rozmiarami i usuwaniem pojedynczych części
-  (`GET /api/maps/{id}/contents`, `DELETE /api/maps/{id}/parts/{source|import|log}`).
-  Wyniki renderu nigdy nie są usuwane bez wyraźnej zgody użytkownika.
+- **Model: źródło → eksporty.** Wgrany `.osm.pbf` to *źródło* (tabela `maps`, `maps/<id>/source.osm.pbf`,
+  nic się nie importuje automatycznie). Z jednego źródła powstaje dowolnie wiele *eksportów*
+  (tabela `exports`, `importer/exports.py`): każdy ma własny folder
+  `maps/<id>/exports/<export_id>/{vector.mbtiles,coverage.json,import.log,meta.json}` i własny
+  profil/moduły/obszar. Eksporty są równorzędne (brak „aktywnego” i archiwum). Podgląd, siatka i render
+  działają na eksporcie (`export_id` w `/api/jobs/render`, w `metadata.json` wyniku i w `jobs.export_id`).
+  Wyniki renderu leżą osobno w `output/<job>/` (z `map_id` i `export_id`) i nigdy nie są usuwane bez zgody.
+- API: `POST /api/maps/{id}/exports` `{name?, profile, modules?, bboxes?}` (kilka prostokątów, nakładające się
+  łączą się; zastąpiło scalanie i reimport), `DELETE /api/exports/{id}?outputs=`, `GET /api/exports/{id}/{coverage,log}`,
+  `GET /api/maps/{id}/contents`, `DELETE /api/maps/{id}/parts/source` (eksporty zostają). Nieudany eksport zostaje
+  ze statusem `failed` i logiem, aż użytkownik go usunie.
+- **Migracja ze starego układu** (`exports.migrate_legacy`, przy starcie API i workera, z blokadą
+  `data/migrate-exports.lock`): aktywny import i `imports/<id>/` każdej mapy są *przenoszone* do folderów
+  eksportów, nic nie jest kasowane. Wyniki sprzed zmiany nie mają `export_id` i w UI są „bez eksportu”.
 - **Profile importu** to katalogi `tilemaker/profiles/<id>/{profile.json,config.json,process.lua}`
   (`importer/profiles.py`). Są `classic` (domyślny, z warstwami `place` i
   `transportation_name`) oraz `tourist` (+ szlaki `hiking`, `mountain_peak`, schroniska
   w `poi`). `tourist/process.lua` jest kopią classic z dodatkami: zmiany wprowadzaj w obu.
-- Import przyjmuje `{profile, bbox}` (`POST /api/maps/{id}/import`). Przy `bbox` PBF jest
-  najpierw wycinany `osmium extract --strategy smart`, więc szlaki w okolicy, a nie w
-  całym kraju. Mapa zapamiętuje `profile` i `region` (kolumny w `maps`, migracja w `init_db`).
+- Przy podanym obszarze PBF jest najpierw wycinany `osmium extract --strategy smart`, więc szlaki
+  w okolicy, a nie w całym kraju. Eksport zapamiętuje `profile`, `modules`, `region` i `regions`.
 - **Próbka przed importem:** zadanie `sample` robi mały import (max ok. 10×10 km, wokół środka
-  obszaru lub widoku) do `sample.mbtiles`, serwowany jako `?variant=sample`. Nie zmienia
-  statusu ani prawdziwego importu mapy. UI pokazuje ją z pasem „Importuj z tym profilem”.
+  obszaru lub widoku) do `maps/<id>/sample.mbtiles`, serwowany jako `/api/maps/{id}/sample/{tiles,style}`. Nie tworzy
+  ani nie zmienia eksportów. UI pokazuje ją z pasem „Utwórz eksport z tym profilem”.
 - Styl może wymagać profilu: `metadata["osm-tilegen"].profiles` w `style.json`
   (pusta lista = działa z każdym). UI pokazuje tylko style zgodne z profilem mapy.
 - Profil `full` = niezmieniona kopia oficjalnego `process-openmaptiles.lua` z tilemakera
@@ -315,22 +324,15 @@ osm-tilegen/
   nazwy rzek i jezior (`water_name`), numery domów (`housenumber`), wyspy, ogólne POI (stacje, szpitale,
   sklepy, gastronomia...) w funkcji `general_poi()` (**ta sama w obu `process.lua`, zmieniaj w obu**),
   granice admin. 5–8. Nie testowane z prawdziwym tilemakerem.
-- **Archiwum importów** (`importer/archive.py`): aktywny import leży w katalogu mapy
-  (`vector.mbtiles`, `coverage.json`, `import.log`, `import.json`). Nowy import powstaje w
-  plikach `*.new` i po sukcesie poprzedni trafia do `imports/<id>/` (nic nie jest kasowane
-  automatycznie; nieudany import zostawia aktywny bez zmian). Okno „Zarządzaj mapami…”
-  pokazuje archiwa z akcjami „Użyj” (`POST /api/maps/{id}/imports/{imp}/activate`) i „Usuń”.
-- **Scalanie obszarów** (`importer/regions.py`): import z `merge=true` dodaje nowy prostokąt do
-  obszarów obecnego importu (ten sam profil). Mapa pamięta `regions` (lista prostokątów) i
-  `region` (obrys). `osmium extract` dostaje jeden `--bbox` albo `--polygon` (MultiPolygon z
-  rozłącznych prostokątów), a import przebudowuje całość; stary trafia do archiwum.
+- **Obszary** (`importer/regions.py`): `merge_bboxes` łączy nakładające się prostokąty, `outline` daje obrys.
+  `osmium extract` dostaje jeden `--bbox` albo `--polygon` (MultiPolygon z rozłącznych prostokątów).
 - **Profil `custom` (moduły do wyboru)** (`importer/modules.py`, `tilemaker/profiles/custom/`): UI pokazuje checkboxy
   (`GET /api/modules`), import przyjmuje `modules` (tylko dla `profile=custom`). `process.lua` to szablon z flagami
   `M.<moduł>`; przy imporcie backend dopisuje `MODULES = {...}` i generuje `config.json` tylko z potrzebnymi warstwami
   (warstwa w Lua musi być w configu, test pilnuje zgodności). Zawsze: drogi, woda, cieki, landcover. Moduły zapisują się
-  w `maps.modules` i `import.json`/`meta.json` archiwum. Logika zduplikowana z classic/tourist: zmiany w obu miejscach.
+  w `exports.modules` i `meta.json` eksportu. Logika zduplikowana z classic/tourist: zmiany w obu miejscach.
   Nie testowane z prawdziwym tilemakerem.
-- Wciąż brak: poligonów mórz (shapefile do tilemakera); równoległych importów jednej mapy (jeden aktywny). Profil `tourist` nie rozszerza `full`.
+- Wciąż brak: poligonów mórz (shapefile do tilemakera); granic administracyjnych z relacji (moduł `boundaries` bierze tylko linie z tagiem). Profil `tourist` nie rozszerza `full`.
 
 **Następne kroki:**
 

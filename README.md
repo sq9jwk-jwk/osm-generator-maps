@@ -93,7 +93,7 @@ sudo systemctl restart osm-tilegen osm-tilegen-worker
 
 Zmiany w `styles/` widać od razu po odświeżeniu przeglądarki (Ctrl+F5). Zmiany
 w `tilemaker/` (nowe warstwy danych, np. POI, numery domów) dotyczą dopiero
-**nowych importów**: zaimportuj mapę ponownie w oknie „Zarządzaj mapami…”.
+**nowych eksportów**: utwórz nowy eksport przyciskiem „+ Eksport” (stare eksporty zostają bez zmian).
 
 Uwagi:
 - Jeśli zmieniła się tylko treść, a numer wersji nie (`backend/app/__init__.py`),
@@ -104,7 +104,7 @@ Uwagi:
   `/etc/osm-tilegen/config.toml`. Usługi są zatrzymywane i uruchamiane
   ponownie automatycznie.
 - Jeśli pojawił się nowy profil importu lub zmienił się `tilemaker/`, po
-  aktualizacji zaimportuj mapę ponownie.
+  aktualizacji utwórz nowy eksport.
 
 ## Odinstalowanie
 

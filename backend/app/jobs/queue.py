@@ -8,14 +8,16 @@ from typing import Any
 from .. import db
 
 
-def enqueue(kind: str, params: dict[str, Any], map_id: str | None = None) -> str:
+def enqueue(
+    kind: str, params: dict[str, Any], map_id: str | None = None, export_id: str | None = None
+) -> str:
     job_id = db.new_id()
     t = db.now()
     with db.connect() as c:
         c.execute(
-            "INSERT INTO jobs (id, kind, map_id, params, status, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, 'queued', ?, ?)",
-            (job_id, kind, map_id, json.dumps(params), t, t),
+            "INSERT INTO jobs (id, kind, map_id, export_id, params, status, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)",
+            (job_id, kind, map_id, export_id, json.dumps(params), t, t),
         )
     return job_id
 

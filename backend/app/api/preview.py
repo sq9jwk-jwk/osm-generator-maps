@@ -12,20 +12,27 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from ..core.config import get_settings
+from ..importer.exports import export_dir
 from ..tiles.xyz import xyz_to_tms_y
+from .exports import get_export_or_404
 
 router = APIRouter(prefix="/api", tags=["preview"])
 
 
-def _mbtiles(map_id: str, variant: str = "") -> Path:
+def _export_mbtiles(export_id: str) -> Path:
+    exp = get_export_or_404(export_id)
+    path = export_dir(exp["map_id"], export_id) / "vector.mbtiles"
+    if not path.exists():
+        raise HTTPException(404, "Eksport nie ma jeszcze kafelków wektorowych")
+    return path
+
+
+def _sample_mbtiles(map_id: str) -> Path:
     if not map_id.isalnum():
         raise HTTPException(400, "Zły identyfikator")
-    if variant not in ("", "sample"):
-        raise HTTPException(400, "Zły wariant")
-    name = "sample.mbtiles" if variant == "sample" else "vector.mbtiles"
-    path = get_settings().maps_dir / map_id / name
+    path = get_settings().maps_dir / map_id / "sample.mbtiles"
     if not path.exists():
-        raise HTTPException(404, "Mapa nie ma jeszcze kafelków wektorowych")
+        raise HTTPException(404, "Brak próbki")
     return path
 
 
@@ -35,9 +42,7 @@ def _metadata(path: str, mtime: float) -> dict[str, str]:
         return dict(conn.execute("SELECT name, value FROM metadata").fetchall())
 
 
-@router.get("/maps/{map_id}/tiles/{z}/{x}/{y}.pbf")
-def vector_tile(map_id: str, z: int, x: int, y: int, variant: str = "") -> Response:
-    path = _mbtiles(map_id, variant)
+def _tile_response(path: Path, z: int, x: int, y: int, cache: str) -> Response:
     with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
         row = conn.execute(
             "SELECT tile_data FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=?",
@@ -46,10 +51,21 @@ def vector_tile(map_id: str, z: int, x: int, y: int, variant: str = "") -> Respo
     if row is None:
         return Response(status_code=204)
     data: bytes = row[0]
-    headers = {"Cache-Control": "no-cache" if variant else "public, max-age=3600"}
+    headers = {"Cache-Control": cache}
     if data[:2] == b"\x1f\x8b":
         headers["Content-Encoding"] = "gzip"
     return Response(data, media_type="application/x-protobuf", headers=headers)
+
+
+@router.get("/exports/{export_id}/tiles/{z}/{x}/{y}.pbf")
+def export_tile(export_id: str, z: int, x: int, y: int) -> Response:
+    # The style puts the file's mtime in the URL (?v=), so long caching is safe.
+    return _tile_response(_export_mbtiles(export_id), z, x, y, "public, max-age=3600")
+
+
+@router.get("/maps/{map_id}/sample/tiles/{z}/{x}/{y}.pbf")
+def sample_tile(map_id: str, z: int, x: int, y: int) -> Response:
+    return _tile_response(_sample_mbtiles(map_id), z, x, y, "no-cache")
 
 
 @router.get("/styles")
@@ -67,25 +83,28 @@ def list_styles() -> list[dict[str, Any]]:
     return out
 
 
-def build_style(style_id: str, map_id: str, base_url: str, variant: str = "") -> dict[str, Any]:
-    """Load a style and point every vector source at the map's local tiles."""
+def build_style(style_id: str, mbtiles: Path, tiles_url: str, base_url: str) -> dict[str, Any]:
+    """Load a style and point every vector source at the given local tiles.
+
+    ``tiles_url`` is the tile template without host and query, e.g.
+    ``/api/exports/<id>/tiles/{z}/{x}/{y}.pbf``.
+    """
     settings = get_settings()
     sdir = settings.styles_dir / style_id
     if not style_id.replace("-", "").replace("_", "").isalnum() or not (sdir / "style.json").exists():
         raise HTTPException(404, "Nieznany styl")
     style = json.loads((sdir / "style.json").read_text(encoding="utf-8"))
-    path = _mbtiles(map_id, variant)
-    meta = _metadata(str(path), path.stat().st_mtime)
+    mtime = mbtiles.stat().st_mtime
+    meta = _metadata(str(mbtiles), mtime)
     maxzoom = int(meta.get("maxzoom", 14))
     minzoom = int(meta.get("minzoom", 0))
     base = base_url.rstrip("/")
     for src in style.get("sources", {}).values():
         if src.get("type") == "vector":
             src.pop("url", None)
-            # The tile URL carries the file's mtime, so a new or re-activated import is never
-            # served from the browser's cache of an earlier one.
-            query = f"?variant={variant}" if variant else f"?v={int(path.stat().st_mtime)}"
-            src["tiles"] = [f"{base}/api/maps/{map_id}/tiles/{{z}}/{{x}}/{{y}}.pbf{query}"]
+            # The URL carries the file's mtime, so a new export is never served from the
+            # browser's cache of an earlier one.
+            src["tiles"] = [f"{base}{tiles_url}?v={int(mtime)}"]
             src["minzoom"], src["maxzoom"] = minzoom, maxzoom
             src["attribution"] = "© OpenMapTiles © OpenStreetMap contributors"
     if (settings.styles_dir / "fonts").is_dir():
@@ -99,6 +118,17 @@ def build_style(style_id: str, map_id: str, base_url: str, variant: str = "") ->
     return style
 
 
-@router.get("/maps/{map_id}/style/{style_id}.json")
-def map_style(map_id: str, style_id: str, request: Request, variant: str = "") -> dict[str, Any]:
-    return build_style(style_id, map_id, str(request.base_url), variant)
+@router.get("/exports/{export_id}/style/{style_id}.json")
+def export_style(export_id: str, style_id: str, request: Request) -> dict[str, Any]:
+    path = _export_mbtiles(export_id)
+    return build_style(
+        style_id, path, f"/api/exports/{export_id}/tiles/{{z}}/{{x}}/{{y}}.pbf", str(request.base_url)
+    )
+
+
+@router.get("/maps/{map_id}/sample/style/{style_id}.json")
+def sample_style(map_id: str, style_id: str, request: Request) -> dict[str, Any]:
+    path = _sample_mbtiles(map_id)
+    return build_style(
+        style_id, path, f"/api/maps/{map_id}/sample/tiles/{{z}}/{{x}}/{{y}}.pbf", str(request.base_url)
+    )

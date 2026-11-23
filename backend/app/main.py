@@ -10,19 +10,23 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, db
+from .api import exports as exports_api
 from .api import jobs, maps, outputs, preview
 from .core.config import get_settings
+from .importer import exports
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     get_settings().ensure_dirs()
     db.init_db()
+    exports.migrate_legacy()
     yield
 
 
 app = FastAPI(title="osm-tilegen", version=__version__, lifespan=lifespan)
 app.include_router(maps.router)
+app.include_router(exports_api.router)
 app.include_router(jobs.router)
 app.include_router(preview.router)
 app.include_router(outputs.router)

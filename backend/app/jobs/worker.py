@@ -7,6 +7,7 @@ import signal
 import time
 
 from .. import db
+from ..importer import exports
 from . import queue
 from .handlers import run_job
 
@@ -24,6 +25,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     db.init_db()
+    exports.migrate_legacy()
     n = queue.requeue_interrupted()
     if n:
         log.info("requeued %d interrupted job(s)", n)

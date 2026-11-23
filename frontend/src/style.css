@@ -56,3 +56,14 @@ button.primary-inline { background: #2563eb; color: #fff; border: 0; border-radi
 #import-dlg .modules { display: grid; gap: 3px; margin-top: 6px; max-height: 260px; overflow-y: auto;
   padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; }
 #import-dlg .modules label { font-size: 13px; }
+
+#maps { list-style: none; margin: 0; padding: 0; }
+#maps li.source { border-bottom: 1px solid #ddd; padding: 6px 0; }
+#maps .src-head { display: flex; gap: 6px; align-items: center; font-weight: 600; }
+#maps .src-head .name { flex: 1; }
+#maps ul.exports { list-style: none; margin: 4px 0 0 10px; padding: 0; }
+#maps ul.exports li { display: flex; gap: 6px; align-items: center; padding: 3px 6px; border-radius: 4px; }
+#maps ul.exports li.active { background: #e0ecff; }
+#maps ul.exports li .name { flex: 1; cursor: pointer; }
+ul.contents li.sub { margin-left: 24px; color: #444; }
+#import-dlg input[type="text"] { width: 100%; box-sizing: border-box; margin-bottom: 6px; }

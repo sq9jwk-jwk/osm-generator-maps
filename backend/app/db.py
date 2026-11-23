@@ -31,6 +31,19 @@ CREATE TABLE IF NOT EXISTS maps (
     regions     TEXT,                   -- JSON [[w,s,e,n],...]: rectangles the import covers
     modules     TEXT                    -- JSON ["poi",...]: modules of a 'custom' import, or NULL
 );
+CREATE TABLE IF NOT EXISTS exports (
+    id          TEXT PRIMARY KEY,
+    map_id      TEXT NOT NULL,          -- the source (.osm.pbf) it was made from
+    name        TEXT NOT NULL,
+    status      TEXT NOT NULL,          -- importing | ready | failed
+    message     TEXT,
+    profile     TEXT NOT NULL DEFAULT 'classic',
+    modules     TEXT,                   -- JSON ["poi",...] for the 'custom' profile, or NULL
+    region      TEXT,                   -- JSON [w,s,e,n]: outline of the area, or NULL (whole file)
+    regions     TEXT,                   -- JSON [[w,s,e,n],...]: rectangles the export covers
+    bbox        TEXT,                   -- JSON [w,s,e,n]: extent of the source file
+    created_at  REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS uploads (
     id          TEXT PRIMARY KEY,
     filename    TEXT NOT NULL,
@@ -42,6 +55,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     id          TEXT PRIMARY KEY,
     kind        TEXT NOT NULL,          -- import | render
     map_id      TEXT,
+    export_id   TEXT,
     params      TEXT NOT NULL,          -- JSON
     status      TEXT NOT NULL,          -- queued | running | done | failed | cancelled
     progress    REAL NOT NULL DEFAULT 0,
@@ -92,6 +106,9 @@ def init_db() -> None:
             c.execute("ALTER TABLE maps ADD COLUMN regions TEXT")
         if "modules" not in cols:
             c.execute("ALTER TABLE maps ADD COLUMN modules TEXT")
+        jcols = {r["name"] for r in c.execute("PRAGMA table_info(jobs)")}
+        if "export_id" not in jcols:
+            c.execute("ALTER TABLE jobs ADD COLUMN export_id TEXT")
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:

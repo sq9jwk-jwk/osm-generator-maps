@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from app import db
 from app.core.config import get_settings
+from app.importer import exports as ex
 from app.jobs import handlers, queue
 from app.main import app
 from app.tiles import xyz
@@ -18,14 +19,16 @@ client = TestClient(app)
 
 
 def _fake_ready_map() -> str:
-    """Insert a 'ready' map with a minimal vector MBTiles file."""
+    """Insert a source with one 'ready' export (minimal vector MBTiles); returns the export id."""
     s = get_settings()
     s.ensure_dirs()
     db.init_db()
     map_id = db.new_id()
-    mdir = s.maps_dir / map_id
-    mdir.mkdir(parents=True)
-    with sqlite3.connect(mdir / "vector.mbtiles") as conn:
+    exp_id = db.new_id()
+    (s.maps_dir / map_id).mkdir(parents=True)
+    edir = ex.export_dir(map_id, exp_id)
+    edir.mkdir(parents=True)
+    with sqlite3.connect(edir / "vector.mbtiles") as conn:
         conn.execute("CREATE TABLE metadata (name TEXT, value TEXT)")
         conn.execute("CREATE TABLE tiles (zoom_level INT, tile_column INT, tile_row INT, tile_data BLOB)")
         conn.executemany("INSERT INTO metadata VALUES (?, ?)", [("minzoom", "0"), ("maxzoom", "14")])
@@ -33,14 +36,19 @@ def _fake_ready_map() -> str:
         conn.execute("INSERT INTO tiles VALUES (10, 571, 688, ?)", (gzip.compress(b"fake-mvt"),))
     bbox = (20.7, 52.1, 21.2, 52.4)
     cov = [list(t) for t in xyz.bbox_to_tiles(bbox, 10)]
-    (mdir / "coverage.json").write_text(json.dumps({"zoom": 10, "tiles": cov}))
+    (edir / "coverage.json").write_text(json.dumps({"zoom": 10, "tiles": cov}))
     with db.connect() as c:
         c.execute(
             "INSERT INTO maps (id, name, filename, size_bytes, status, bbox, created_at)"
-            " VALUES (?, 'test', 'test.osm.pbf', 1, 'ready', ?, ?)",
+            " VALUES (?, 'test', 'test.osm.pbf', 1, 'uploaded', ?, ?)",
             (map_id, json.dumps(bbox), db.now()),
         )
-    return map_id
+        c.execute(
+            "INSERT INTO exports (id, map_id, name, status, profile, bbox, created_at)"
+            " VALUES (?, ?, 'test export', 'ready', 'classic', ?, ?)",
+            (exp_id, map_id, json.dumps(bbox), db.now()),
+        )
+    return exp_id
 
 
 def test_health():
@@ -64,7 +72,8 @@ def test_chunked_upload_flow():
         r = c.post(f"/api/uploads/{uid}/complete")
         assert r.status_code == 200, r.text
         map_id = r.json()["map_id"]
-        assert c.get(f"/api/maps/{map_id}").json()["status"] == "uploaded"
+        m = c.get(f"/api/maps/{map_id}").json()
+        assert m["status"] == "uploaded" and m["exports"] == []
         # uploading must not start an import by itself
         jobs = c.get("/api/jobs").json()
         assert not any(j["map_id"] == map_id for j in jobs)
@@ -80,28 +89,28 @@ def test_reject_wrong_extension_and_content():
 
 def test_preview_tile_and_style():
     with TestClient(app) as c:
-        map_id = _fake_ready_map()
-        r = c.get(f"/api/maps/{map_id}/tiles/10/571/335.pbf")
+        exp_id = _fake_ready_map()
+        r = c.get(f"/api/exports/{exp_id}/tiles/10/571/335.pbf")
         assert r.status_code == 200
-        assert c.get(f"/api/maps/{map_id}/tiles/10/0/0.pbf").status_code == 204
+        assert c.get(f"/api/exports/{exp_id}/tiles/10/0/0.pbf").status_code == 204
         styles = c.get("/api/styles").json()
         assert any(s["id"] == "basic" for s in styles)
-        st = c.get(f"/api/maps/{map_id}/style/basic.json").json()
+        st = c.get(f"/api/exports/{exp_id}/style/basic.json").json()
         src = next(iter(st["sources"].values()))
-        assert f"/api/maps/{map_id}/tiles/{{z}}/{{x}}/{{y}}.pbf?v=" in src["tiles"][0]
-        assert c.get(f"/api/maps/{map_id}/coverage").json()["zoom"] == 10
+        assert f"/api/exports/{exp_id}/tiles/{{z}}/{{x}}/{{y}}.pbf?v=" in src["tiles"][0]
+        assert c.get(f"/api/exports/{exp_id}/coverage").json()["zoom"] == 10
 
 
 def test_render_job_and_zip():
     with TestClient(app) as c:
-        map_id = _fake_ready_map()
+        exp_id = _fake_ready_map()
         bad = c.post("/api/jobs/render", json={
-            "map_id": map_id, "style": "basic", "grid_zoom": 12, "min_zoom": 11,
+            "export_id": exp_id, "style": "basic", "grid_zoom": 12, "min_zoom": 11,
             "max_zoom": 11, "tiles": [[2287, 1346]],
         })
         assert bad.status_code == 422  # grid finer than output
         r = c.post("/api/jobs/render", json={
-            "map_id": map_id, "style": "basic", "grid_zoom": 12, "min_zoom": 12,
+            "export_id": exp_id, "style": "basic", "grid_zoom": 12, "min_zoom": 12,
             "max_zoom": 13, "tiles": [[2287, 1346]], "tile_px": 128,
             "format": "jpg", "scheme": "tms",
         })
@@ -120,6 +129,8 @@ def test_render_job_and_zip():
         outs = c.get("/api/outputs").json()
         meta = next(o for o in outs if o["job_id"] == job_id)
         assert meta["tiles"] == 5 and meta["scheme"] == "tms"
+        assert meta["export_id"] == exp_id and meta["map_id"]
+        assert c.get(f"/api/exports/{exp_id}").json()["outputs"] == 1
 
         z = c.get(f"/api/outputs/{job_id}/zip")
         assert z.status_code == 200

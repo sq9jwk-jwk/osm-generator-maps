@@ -1,4 +1,4 @@
-"""Map library, resumable chunked upload and saved selections."""
+"""Source library (uploaded .osm.pbf files), exports made from them, resumable upload, selections."""
 
 from __future__ import annotations
 
@@ -13,11 +13,12 @@ from pydantic import BaseModel, Field
 
 from .. import db
 from ..core.config import get_settings
-from ..importer import archive
+from ..importer import exports as ex
 from ..importer import modules as modules_mod
+from ..importer import regions as regions_mod
 from ..importer.profiles import DEFAULT_PROFILE, get_profile, list_profiles
 from ..jobs import queue
-from ..osm.analyze import looks_like_pbf
+from ..osm.analyze import looks_like_pbf, read_bbox
 
 router = APIRouter(prefix="/api", tags=["maps"])
 
@@ -31,42 +32,22 @@ def _get_map(map_id: str) -> dict[str, Any]:
     return m
 
 
-# ------------------------------------------------------------------ maps
+# ------------------------------------------------------------------ sources
 
 SOURCE_NAME = "source.osm.pbf"
 
 
-def _dir_size(path: Path) -> int:
-    if not path.is_dir():
-        return 0
-    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
-
-
-def _map_outputs(map_id: str) -> list[str]:
-    """Job ids of rendered outputs that came from this map."""
-    root = get_settings().output_dir
-    ids: list[str] = []
-    if not root.exists():
-        return ids
-    for d in root.iterdir():
-        meta = d / "metadata.json"
-        if not meta.exists():
-            continue
-        try:
-            if json.loads(meta.read_text(encoding="utf-8")).get("map_id") == map_id:
-                ids.append(d.name)
-        except (OSError, ValueError):
-            continue
-    return ids
-
-
-def _with_usage(m: dict[str, Any]) -> dict[str, Any]:
-    mdir = get_settings().maps_dir / m["id"]
-    source = mdir / SOURCE_NAME
-    source_bytes = source.stat().st_size if source.exists() else 0
-    m["source_bytes"] = source_bytes
-    m["import_bytes"] = max(_dir_size(mdir) - source_bytes, 0)
-    m["outputs"] = len(_map_outputs(m["id"]))
+def _with_usage(m: dict[str, Any], outputs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Source row plus its size, its exports (newest first) and the number of its results."""
+    source = get_settings().maps_dir / m["id"] / SOURCE_NAME
+    m["source_bytes"] = source.stat().st_size if source.exists() else 0
+    with db.connect() as c:
+        rows = c.execute(
+            "SELECT * FROM exports WHERE map_id = ? ORDER BY created_at DESC", (m["id"],)
+        ).fetchall()
+    m["exports"] = [ex.with_usage(db.row_to_dict(r) or {}, outputs) for r in rows]
+    m["import_bytes"] = sum(e["bytes"] for e in m["exports"])
+    m["outputs"] = sum(1 for o in outputs if o.get("map_id") == m["id"])
     return m
 
 
@@ -74,216 +55,77 @@ def _with_usage(m: dict[str, Any]) -> dict[str, Any]:
 def list_maps() -> list[dict[str, Any]]:
     with db.connect() as c:
         rows = c.execute("SELECT * FROM maps ORDER BY created_at DESC").fetchall()
-    return [_with_usage(db.row_to_dict(r)) for r in rows]  # type: ignore[arg-type]
+    outputs = ex.scan_outputs()
+    return [_with_usage(db.row_to_dict(r) or {}, outputs) for r in rows]
 
 
 @router.get("/maps/{map_id}")
 def get_map(map_id: str) -> dict[str, Any]:
-    return _get_map(map_id)
-
-
-@router.get("/maps/{map_id}/coverage")
-def get_coverage(map_id: str) -> dict[str, Any]:
-    _get_map(map_id)
-    path = get_settings().maps_dir / map_id / "coverage.json"
-    if not path.exists():
-        raise HTTPException(404, "Maska pokrycia jeszcze nie istnieje")
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-@router.get("/maps/{map_id}/log")
-def get_import_log(map_id: str) -> dict[str, str]:
-    _get_map(map_id)
-    mdir = get_settings().maps_dir / map_id
-    path = mdir / "import.new.log"  # latest attempt (kept when it failed)
-    if not path.exists():
-        path = mdir / "import.log"
-    text = path.read_text(encoding="utf-8")[-20000:] if path.exists() else ""
-    return {"log": text}
+    return _with_usage(_get_map(map_id), ex.scan_outputs())
 
 
 def _ensure_idle(c: Any, map_id: str) -> None:
-    busy = c.execute(
-        "SELECT 1 FROM jobs WHERE map_id = ? AND status IN ('queued','running')", (map_id,)
-    ).fetchone()
-    if busy:
+    if ex.active_jobs(c, map_id=map_id):
         raise HTTPException(409, "Mapa ma aktywne zadania")
 
 
 @router.delete("/maps/{map_id}")
-def delete_map(
-    map_id: str, import_only: bool = False, outputs: bool = False
-) -> dict[str, Any]:
-    """Delete a map.
-
-    ``import_only``: keep the source PBF and archived imports, remove only the active
-    import (vector MBTiles, coverage, log); the map goes back to status ``uploaded``.
-    Otherwise the whole map directory (including the PBF) and saved selections
-    are removed. ``outputs`` additionally deletes rendered tiles from this map.
-    """
+def delete_map(map_id: str, outputs: bool = False) -> dict[str, Any]:
+    """Delete a source with all its exports. ``outputs`` also deletes its rendered results."""
     _get_map(map_id)
     settings = get_settings()
     mdir = settings.maps_dir / map_id
-    freed = 0
+    freed = ex.dir_size(mdir)
     with db.connect() as c:
         _ensure_idle(c, map_id)
-        if import_only:
-            if mdir.is_dir():
-                for p in mdir.iterdir():
-                    if p.name in (SOURCE_NAME, archive.ARCHIVE_DIR):
-                        continue
-                    freed += _dir_size(p) if p.is_dir() else p.stat().st_size
-                    shutil.rmtree(p) if p.is_dir() else p.unlink()
-            c.execute(
-                "UPDATE maps SET status = 'uploaded', bbox = NULL, message = NULL WHERE id = ?",
-                (map_id,),
-            )
-        else:
-            freed += _dir_size(mdir)
-            c.execute("DELETE FROM maps WHERE id = ?", (map_id,))
-            c.execute("DELETE FROM selections WHERE map_id = ?", (map_id,))
-            c.execute("DELETE FROM jobs WHERE map_id = ?", (map_id,))
-    if not import_only:
-        shutil.rmtree(mdir, ignore_errors=True)
-    removed_outputs = 0
+        c.execute("DELETE FROM maps WHERE id = ?", (map_id,))
+        c.execute("DELETE FROM exports WHERE map_id = ?", (map_id,))
+        c.execute("DELETE FROM selections WHERE map_id = ?", (map_id,))
+        c.execute("DELETE FROM jobs WHERE map_id = ?", (map_id,))
+    shutil.rmtree(mdir, ignore_errors=True)
+    removed = 0
     if outputs:
-        for job_id in _map_outputs(map_id):
-            freed += _dir_size(settings.output_dir / job_id)
-            shutil.rmtree(settings.output_dir / job_id, ignore_errors=True)
-            removed_outputs += 1
-    return {"ok": True, "freed_bytes": freed, "removed_outputs": removed_outputs}
-
-
-LOG_NAMES = ("import.log", "import.new.log")
-PARTS = ("source", "import", "log")
-
-
-def _part_paths(mdir: Path, part: str) -> list[Path]:
-    """Files/dirs belonging to one deletable part of a map."""
-    if not mdir.is_dir():
-        return []
-    if part == "source":
-        return [mdir / SOURCE_NAME] if (mdir / SOURCE_NAME).exists() else []
-    if part == "log":
-        return [mdir / n for n in LOG_NAMES if (mdir / n).exists()]
-    # "import": active vector tiles, coverage mask, tilemaker working files
-    # (archived imports are separate and are only removed one by one)
-    skip = (SOURCE_NAME, archive.ARCHIVE_DIR, *LOG_NAMES)
-    return [p for p in mdir.iterdir() if p.name not in skip]
-
-
-def _size(p: Path) -> int:
-    return _dir_size(p) if p.is_dir() else p.stat().st_size
+        for o in ex.scan_outputs():
+            if o.get("map_id") == map_id:
+                d = settings.output_dir / str(o["job_id"])
+                freed += ex.dir_size(d)
+                shutil.rmtree(d, ignore_errors=True)
+                removed += 1
+    return {"ok": True, "freed_bytes": freed, "removed_outputs": removed}
 
 
 @router.get("/maps/{map_id}/contents")
 def map_contents(map_id: str) -> dict[str, Any]:
-    """What this map occupies on disk: its own parts and rendered outputs."""
-    _get_map(map_id)
-    settings = get_settings()
-    mdir = settings.maps_dir / map_id
-    labels = {
-        "source": "Plik źródłowy .osm.pbf",
-        "import": "Aktywny import (kafelki wektorowe, maska pokrycia)",
-        "log": "Log importu",
+    """What a source occupies on disk: the PBF, each export folder and rendered results."""
+    m = _with_usage(_get_map(map_id), ex.scan_outputs())
+    outs = [o for o in ex.scan_outputs() if o.get("map_id") == map_id]
+    outs.sort(key=lambda o: o.get("created_at", ""), reverse=True)
+    return {
+        "source_bytes": m["source_bytes"],
+        "exports": m["exports"],
+        "outputs": outs,
     }
-    parts = []
-    for part in PARTS:
-        paths = _part_paths(mdir, part)
-        if paths:
-            parts.append(
-                {"key": part, "label": labels[part], "bytes": sum(_size(p) for p in paths)}
-            )
-    outs = []
-    for job_id in _map_outputs(map_id):
-        d = settings.output_dir / job_id
-        try:
-            meta = json.loads((d / "metadata.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        meta["size_bytes"] = _dir_size(d)
-        outs.append(meta)
-    outs.sort(key=lambda m: m.get("created_at", ""), reverse=True)
-    return {"parts": parts, "outputs": outs, "imports": archive.list_archives(mdir)}
 
 
-@router.delete("/maps/{map_id}/parts/{part}")
-def delete_map_part(map_id: str, part: str) -> dict[str, Any]:
-    """Delete one part of a map: ``source``, ``import`` or ``log``."""
-    if part not in PARTS:
-        raise HTTPException(400, "Nieznana część mapy")
+@router.delete("/maps/{map_id}/parts/source")
+def delete_source(map_id: str) -> dict[str, Any]:
+    """Delete only the .osm.pbf. Exports and results stay usable (new exports need the file)."""
     _get_map(map_id)
-    mdir = get_settings().maps_dir / map_id
-    freed = 0
+    path = get_settings().maps_dir / map_id / SOURCE_NAME
     with db.connect() as c:
         _ensure_idle(c, map_id)
-        if part == "import" and not (mdir / SOURCE_NAME).exists():
-            raise HTTPException(409, "Bez pliku źródłowego usuń całą mapę")
-        for p in _part_paths(mdir, part):
-            freed += _size(p)
-            shutil.rmtree(p) if p.is_dir() else p.unlink()
-        if part == "import":
-            c.execute(
-                "UPDATE maps SET status = 'uploaded', bbox = NULL, message = NULL WHERE id = ?",
-                (map_id,),
-            )
+    freed = path.stat().st_size if path.exists() else 0
+    path.unlink(missing_ok=True)
     return {"ok": True, "freed_bytes": freed}
 
 
-@router.post("/maps/{map_id}/imports/{imp_id}/activate")
-def activate_import(map_id: str, imp_id: str) -> dict[str, Any]:
-    """Make an archived import the active one (the current one is archived, not deleted)."""
-    m = _get_map(map_id)
-    mdir = get_settings().maps_dir / map_id
-    with db.connect() as c:
-        _ensure_idle(c, map_id)
-        try:
-            meta = archive.activate(mdir, imp_id, m)
-        except (ValueError, FileNotFoundError) as exc:
-            raise HTTPException(404, "Nie ma takiego importu") from exc
-        c.execute(
-            "UPDATE maps SET status = 'ready', message = NULL, profile = ?, modules = ?, region = ?,"
-            " regions = ?, bbox = COALESCE(?, bbox) WHERE id = ?",
-            (
-                meta.get("profile") or DEFAULT_PROFILE,
-                json.dumps(meta["modules"]) if meta.get("modules") is not None else None,
-                json.dumps(meta["region"]) if meta.get("region") else None,
-                json.dumps(meta["regions"]) if meta.get("regions") else None,
-                json.dumps(meta["bbox"]) if meta.get("bbox") else None,
-                map_id,
-            ),
-        )
-    return {"ok": True}
-
-
-@router.delete("/maps/{map_id}/imports/{imp_id}")
-def delete_archived_import(map_id: str, imp_id: str) -> dict[str, Any]:
-    _get_map(map_id)
-    mdir = get_settings().maps_dir / map_id
-    with db.connect() as c:
-        _ensure_idle(c, map_id)
-        try:
-            path = archive.archive_path(mdir, imp_id)
-        except (ValueError, FileNotFoundError) as exc:
-            raise HTTPException(404, "Nie ma takiego importu") from exc
-        freed = _dir_size(path)
-        shutil.rmtree(path, ignore_errors=True)
-    return {"ok": True, "freed_bytes": freed}
-
-
-class ImportRequest(BaseModel):
-    profile: str = DEFAULT_PROFILE
-    # only for profile 'custom': ids of the enabled modules (default set when omitted)
-    modules: list[str] | None = None
-    # [west, south, east, north]; None = whole file
-    bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
-    # add ``bbox`` to the areas the map's current import already covers (same profile)
-    merge: bool = False
-
+# ------------------------------------------------------------------ new export & sample
 
 def _validated_bbox(bbox: list[float] | None, max_span: float | None = None) -> list[float] | None:
     if bbox is None:
         return None
+    if len(bbox) != 4:
+        raise HTTPException(400, "Prostokąt to cztery liczby (W S E N)")
     w, s, e, n = bbox
     if not (-180 <= w < e <= 180 and -90 <= s < n <= 90):
         raise HTTPException(400, "Niepoprawny prostokąt (W S E N)")
@@ -328,69 +170,78 @@ def profiles() -> list[dict[str, str]]:
     ]
 
 
-@router.post("/maps/{map_id}/import")
-def import_map(map_id: str, body: ImportRequest) -> dict[str, str]:
-    """(Re)import the source PBF with a profile, optionally limited to an area."""
-    _get_map(map_id)
+class ExportRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=100)
+    profile: str = DEFAULT_PROFILE
+    # only for profile 'custom': ids of the enabled modules (default set when omitted)
+    modules: list[str] | None = None
+    # rectangles [west, south, east, north]; None or empty = whole file
+    bboxes: list[list[float]] | None = None
+
+
+def _default_name(profile: str, modules: list[str] | None, areas: list[list[float]] | None) -> str:
+    label = next((p.name for p in list_profiles(get_settings()) if p.id == profile), profile)
+    if modules is not None:
+        label = f"Własny ({len(modules)} elem.)"
+    return f"{label} · {'wycinek' if areas else 'cały plik'}"
+
+
+@router.post("/maps/{map_id}/exports")
+def create_export(map_id: str, body: ExportRequest) -> dict[str, str]:
+    """Start a new export of a source: a new folder, imported in the background."""
+    m = _get_map(map_id)
     if not (get_settings().maps_dir / map_id / SOURCE_NAME).exists():
         raise HTTPException(409, "Brak pliku źródłowego")
     _check_profile(body.profile)
     mods = _import_modules(body.profile, body.modules)
-    region = _validated_bbox(body.bbox)
-    areas = [region] if region else None
-    if body.merge:
-        m = _get_map(map_id)
-        current = m.get("regions") or ([m["region"]] if m.get("region") else None)
-        if region is None:
-            raise HTTPException(400, "Scalanie wymaga wskazania obszaru")
-        if m["status"] == "ready" and m.get("profile") == body.profile and m.get("modules") == mods:
-            if current is None:
-                raise HTTPException(409, "Obecny import obejmuje już cały plik")
-            areas = [*current, region]
+    boxes = [_validated_bbox(b) for b in (body.bboxes or [])]
+    areas = [list(b) for b in regions_mod.merge_bboxes([tuple(b) for b in boxes])] if boxes else None  # type: ignore[arg-type]
+    region = list(regions_mod.outline([tuple(a) for a in areas])) if areas else None
+    name = (body.name or "").strip() or _default_name(body.profile, mods, areas)
+    exp_id = db.new_id()
     with db.connect() as c:
-        _ensure_idle(c, map_id)
-        c.execute("UPDATE maps SET status = 'uploaded', message = NULL WHERE id = ?", (map_id,))
-    job_id = queue.enqueue(
-        "import", {"profile": body.profile, "modules": mods, "regions": areas}, map_id=map_id
-    )
-    return {"job_id": job_id}
-
-
-@router.post("/maps/{map_id}/reimport")
-def reimport_map(map_id: str) -> dict[str, str]:
-    """Repeat the import with the profile and area the map already has."""
-    m = _get_map(map_id)
-    profile = m.get("profile") or DEFAULT_PROFILE
-    _check_profile(profile)
-    if not (get_settings().maps_dir / map_id / SOURCE_NAME).exists():
-        raise HTTPException(409, "Brak pliku źródłowego")
-    areas = m.get("regions") or ([m["region"]] if m.get("region") else None)
-    with db.connect() as c:
-        _ensure_idle(c, map_id)
-        c.execute("UPDATE maps SET status = 'uploaded', message = NULL WHERE id = ?", (map_id,))
+        c.execute(
+            "INSERT INTO exports (id, map_id, name, status, profile, modules, region, regions, bbox,"
+            " created_at) VALUES (?, ?, ?, 'importing', ?, ?, ?, ?, ?, ?)",
+            (
+                exp_id, map_id, name, body.profile,
+                json.dumps(mods) if mods is not None else None,
+                json.dumps(region) if region else None,
+                json.dumps(areas) if areas else None,
+                json.dumps(m["bbox"]) if m.get("bbox") else None,
+                db.now(),
+            ),
+        )
+    ex.export_dir(map_id, exp_id).mkdir(parents=True, exist_ok=True)
     job_id = queue.enqueue(
         "import",
-        {"profile": profile, "modules": _import_modules(profile, m.get("modules")), "regions": areas},
+        {"profile": body.profile, "modules": mods, "regions": areas},
         map_id=map_id,
+        export_id=exp_id,
     )
-    return {"job_id": job_id}
+    return {"export_id": exp_id, "job_id": job_id}
 
 
 # Largest side of a sample area in degrees (about 11 km at the equator).
 SAMPLE_MAX_SPAN = 0.1
 
 
+class SampleRequest(BaseModel):
+    profile: str = DEFAULT_PROFILE
+    modules: list[str] | None = None
+    # [west, south, east, north]
+    bbox: list[float] = Field(min_length=4, max_length=4)
+
+
 @router.post("/maps/{map_id}/sample")
-def create_sample(map_id: str, body: ImportRequest) -> dict[str, Any]:
-    """Small trial import of a profile for a preview before the real import."""
+def create_sample(map_id: str, body: SampleRequest) -> dict[str, Any]:
+    """Small trial import of a profile for a preview before creating an export."""
     _get_map(map_id)
     if not (get_settings().maps_dir / map_id / SOURCE_NAME).exists():
         raise HTTPException(409, "Brak pliku źródłowego")
     _check_profile(body.profile)
     mods = _import_modules(body.profile, body.modules)
     bbox = _validated_bbox(body.bbox, SAMPLE_MAX_SPAN)
-    if bbox is None:
-        raise HTTPException(400, "Próbka wymaga obszaru")
     with db.connect() as c:
         busy = c.execute(
             "SELECT 1 FROM jobs WHERE map_id = ? AND kind = 'sample'"
@@ -507,16 +358,22 @@ def complete_upload(upload_id: str) -> dict[str, Any]:
     map_id = db.new_id()
     mdir = settings.maps_dir / map_id
     mdir.mkdir(parents=True)
-    src.replace(mdir / "source.osm.pbf")
+    src.replace(mdir / SOURCE_NAME)
     name = u["filename"].removesuffix(".osm.pbf")
+    bbox = None
+    try:  # extent from the PBF header (cheap); the UI also works without it
+        if shutil.which(settings.osmium_bin):
+            bbox = read_bbox(mdir / SOURCE_NAME, settings.osmium_bin)
+    except Exception:  # noqa: BLE001
+        bbox = None
     with db.connect() as c:
         c.execute(
-            "INSERT INTO maps (id, name, filename, size_bytes, status, created_at)"
-            " VALUES (?, ?, ?, ?, 'uploaded', ?)",
-            (map_id, name, u["filename"], u["size_bytes"], db.now()),
+            "INSERT INTO maps (id, name, filename, size_bytes, status, bbox, created_at)"
+            " VALUES (?, ?, ?, ?, 'uploaded', ?, ?)",
+            (map_id, name, u["filename"], u["size_bytes"], json.dumps(bbox) if bbox else None, db.now()),
         )
         c.execute("DELETE FROM uploads WHERE id = ?", (upload_id,))
-    # No automatic import: the user picks profile, modules and area first (POST /maps/{id}/import).
+    # No automatic export: the user picks profile, modules and area (POST /maps/{id}/exports).
     return {"map_id": map_id}
 
 

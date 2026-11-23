@@ -10,13 +10,13 @@
       <h1>osm-tilegen</h1>
 
       <section>
-        <h2>1. Mapy</h2>
+        <h2>1. Mapy i eksporty</h2>
         <label class="file">
           <input id="file" type="file" accept=".pbf" />
           <span>Wgraj plik .osm.pbf</span>
         </label>
         <div id="upload-progress" class="muted"></div>
-        <ul id="maps" class="list"></ul>
+        <ul id="maps" class="tree"></ul>
         <button id="open-library">Zarządzaj mapami…</button>
       </section>
 
@@ -92,8 +92,8 @@
       <p id="library-total" class="muted"></p>
       <table id="library-table">
         <thead>
-          <tr><th></th><th>Nazwa</th><th>Wgrano</th><th>Obszar (W S E N)</th><th>Status</th>
-            <th>Plik PBF</th><th>Dane importu</th><th>Wyniki</th><th></th></tr>
+          <tr><th></th><th>Nazwa</th><th>Wgrano</th><th>Zasięg pliku (W S E N)</th>
+            <th>Plik PBF</th><th>Eksporty</th><th>Wyniki</th><th></th></tr>
         </thead>
         <tbody></tbody>
       </table>
@@ -101,10 +101,13 @@
     </dialog>
     <dialog id="import-dlg">
       <form method="dialog" class="dlg-head">
-        <h2 id="import-title">Import mapy</h2>
+        <h2 id="import-title">Nowy eksport</h2>
         <button>Zamknij</button>
       </form>
       <div class="field">
+        <label>Nazwa eksportu (opcjonalnie)
+          <input id="import-name" type="text" maxlength="100" placeholder="np. Tatry, szlaki" />
+        </label>
         <label>Profil danych
           <select id="import-profile"></select>
         </label>
@@ -112,31 +115,31 @@
         <div id="import-modules" class="modules" hidden></div>
       </div>
       <div class="field">
-        <b>Obszar importu</b>
+        <b>Obszar eksportu</b>
         <label><input type="radio" name="import-area" value="all" checked /> cały plik</label>
-        <label><input type="radio" name="import-area" value="rect" /> wybrany prostokąt</label>
+        <label><input type="radio" name="import-area" value="rect" /> wybrane prostokąty</label>
         <div class="row">
-          <button id="import-draw" type="button">Narysuj prostokąt na mapie</button>
+          <button id="import-draw" type="button">Dodaj prostokąt na mapie</button>
+          <button id="import-clear" type="button" hidden>Wyczyść</button>
           <span id="import-bbox" class="muted"></span>
         </div>
-        <label id="import-merge-row" hidden><input type="checkbox" id="import-merge" checked />
-          dodaj do obszaru obecnego importu (scal)</label>
-        <p class="hint">Ograniczenie obszaru skraca import i zmniejsza zużycie pamięci. Wycinek
-          zachowuje całe szlaki i obiekty na krawędzi.</p>
+        <p class="hint">Można dodać kilka prostokątów (nakładające się łączą się w jeden).
+          Ograniczenie obszaru skraca import i zmniejsza zużycie pamięci. Wycinek zachowuje całe
+          szlaki i obiekty na krawędzi.</p>
       </div>
       <div class="field">
-        <b>Zobacz przed importem</b>
+        <b>Zobacz przed eksportem</b>
         <p class="hint">Próbka to mały fragment (ok. 10×10 km wokół środka obszaru lub widoku mapy)
-          zaimportowany tym profilem. Powstaje w kilkadziesiąt sekund i nie zmienia obecnej mapy.</p>
+          zaimportowany tym profilem. Powstaje w kilkadziesiąt sekund i nie tworzy ani nie zmienia eksportów.</p>
         <button id="import-sample" type="button">Pokaż próbkę na mapie</button>
       </div>
       <div class="row end">
-        <button id="import-start" type="button" class="primary-inline">Importuj</button>
+        <button id="import-start" type="button" class="primary-inline">Utwórz eksport</button>
       </div>
     </dialog>
     <div id="sample-bar" hidden>
       <span id="sample-text"></span>
-      <button id="sample-import" class="primary-inline">Importuj z tym profilem</button>
+      <button id="sample-import" class="primary-inline">Utwórz eksport z tym profilem</button>
       <button id="sample-close">Zamknij próbkę</button>
     </div>
     <div id="toast" hidden></div>

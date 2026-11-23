@@ -3,7 +3,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import "./style.css";
 import {
   api, uploadPbf,
-  type BBox, type Job, type MapContents, type MapInfo, type MapPart, type OutputInfo,
+  type BBox, type ExportInfo, type Job, type MapContents, type MapInfo, type OutputInfo,
   type ModuleInfo, type ProfileInfo, type StyleInfo,
 } from "./api";
 import { SelectionGrid } from "./grid";
@@ -23,7 +23,7 @@ map.addControl(new maplibregl.NavigationControl(), "top-right");
 map.addControl(new maplibregl.ScaleControl({}), "bottom-left");
 
 const grid = new SelectionGrid(map);
-let current: MapInfo | null = null;
+let current: ExportInfo | null = null;
 let maps: MapInfo[] = [];
 let profiles: ProfileInfo[] = [];
 let moduleCatalogue: ModuleInfo[] = [];
@@ -61,23 +61,36 @@ function bboxFeature(b: BBox | null | undefined): GeoJSON.Feature | GeoJSON.Feat
   } : { type: "FeatureCollection", features: [] };
 }
 
-let draftBBox: BBox | null = null;
+let draftRects: BBox[] = [];
 
-function setDraft(b: BBox | null) { draftBBox = b; drawDraft(); }
+function setDraft(b: BBox[] | BBox | null) {
+  draftRects = b ? (typeof b[0] === "number" ? [b as BBox] : (b as BBox[])) : [];
+  drawDraft();
+}
 
 function drawDraft() {
-  (map.getSource("draft") as maplibregl.GeoJSONSource | undefined)?.setData(bboxFeature(draftBBox));
+  (map.getSource("draft") as maplibregl.GeoJSONSource | undefined)?.setData({
+    type: "FeatureCollection",
+    features: draftRects.map((b) => bboxFeature(b) as GeoJSON.Feature),
+  });
 }
 
 function drawBBox() {
   const src = map.getSource("bbox") as maplibregl.GeoJSONSource | undefined;
   if (!src) return;
-  src.setData(bboxFeature(current?.bbox));
+  src.setData(bboxFeature(current?.region ?? current?.bbox));
 }
 
 map.on("style.load", installOverlays);
 
-// ------------------------------------------------------------------ maps
+// ------------------------------------------------------------------ sources & exports
+
+const exportsOf = (): ExportInfo[] => maps.flatMap((m) => m.exports);
+const sourceOf = (e: ExportInfo) => maps.find((m) => m.id === e.map_id);
+const exportLabel = (e: ExportInfo) => `${sourceOf(e)?.name ?? "?"} → ${e.name}`;
+const STATUS_EXPORT: Record<ExportInfo["status"], string> = {
+  importing: "import…", ready: "gotowy", failed: "błąd",
+};
 
 async function refreshMaps() {
   maps = await api.maps();
@@ -85,43 +98,77 @@ async function refreshMaps() {
   ul.innerHTML = "";
   for (const m of maps) {
     const li = document.createElement("li");
-    if (m.id === current?.id) li.classList.add("active");
-    li.innerHTML = `<span class="name" title="${m.message ?? ""}">${m.name}
-      <span class="muted">${formatBytes(m.size_bytes)}</span></span>
-      <span class="badge ${m.status}">${m.status}</span><button title="Usuń">✕</button>`;
-    li.querySelector(".name")!.addEventListener("click", () => selectMap(m.id));
-    li.querySelector("button")!.addEventListener("click", async () => {
-      if (!confirm(`Usunąć mapę ${m.name}?`)) return;
-      try { await api.deleteMap(m.id); if (current?.id === m.id) await selectMap(null); refreshMaps(); }
-      catch (e) { toast(String(e)); }
-    });
-    ul.appendChild(li);
+    li.className = "source";
+    const head = document.createElement("div");
+    head.className = "src-head";
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = m.name;
+    name.title = m.filename;
+    const size = document.createElement("span");
+    size.className = "muted";
+    size.textContent = formatBytes(m.size_bytes);
+    const add = actionButton("+ Eksport", () => void openImportDialog(m));
+    add.title = "Nowy eksport z tego pliku";
+    add.disabled = m.source_bytes === 0;
+    head.append(name, size, add);
+    li.append(head);
+
+    const sub = document.createElement("ul");
+    sub.className = "exports";
+    for (const e of m.exports) {
+      const row = document.createElement("li");
+      if (e.id === current?.id) row.classList.add("active");
+      const label = document.createElement("span");
+      label.className = "name";
+      label.textContent = e.name;
+      label.title = e.message ?? "";
+      label.addEventListener("click", () => void selectExport(e.id));
+      const badge = document.createElement("span");
+      badge.className = `badge ${e.status}`;
+      badge.textContent = STATUS_EXPORT[e.status];
+      badge.title = e.message ?? "";
+      const del = actionButton("✕", () => void deleteExportFlow(m, e), true);
+      del.title = "Usuń eksport";
+      del.disabled = e.status === "importing";
+      row.append(label, badge, del);
+      sub.append(row);
+    }
+    if (!m.exports.length) {
+      const empty = document.createElement("li");
+      empty.className = "muted";
+      empty.textContent = "Brak eksportów. Utwórz pierwszy przyciskiem „+ Eksport”.";
+      sub.append(empty);
+    }
+    li.append(sub);
+    ul.append(li);
   }
   if (library.open) renderLibrary();
-  // A map we are looking at may have just finished importing.
+  // The export we are looking at may have just finished (or been removed).
   if (current) {
-    const fresh = maps.find((m) => m.id === current!.id);
-    if (fresh && fresh.status !== current.status) await selectMap(fresh.id);
+    const fresh = exportsOf().find((e) => e.id === current!.id);
+    if (!fresh) await selectExport(null);
+    else if (fresh.status !== current.status) await selectExport(fresh.id);
   }
 }
 
-/** Which import the style dropdown was last chosen for (a new import deserves a fresh default). */
+/** Which export the style dropdown was last chosen for (a new export deserves a fresh default). */
 let styleFor = "";
 
-/** Best default view for an import: a labelled style, tourist when the import has trails. */
-function defaultStyleFor(m: MapInfo): string {
+/** Best default view for an export: a labelled style, tourist when it has trails. */
+function defaultStyleFor(e: ExportInfo): string {
   const has = (id: string) => [...$<HTMLSelectElement>("style").options].some((o) => o.value === id);
-  const hiking = m.profile === "tourist" || (m.profile === "custom" && !!m.modules?.includes("hiking"));
-  if (m.profile === "full" && has("bright")) return "bright";
+  const hiking = e.profile === "tourist" || (e.profile === "custom" && !!e.modules?.includes("hiking"));
+  if (e.profile === "full" && has("bright")) return "bright";
   if (hiking && has("tourist")) return "tourist";
   return has("classic") ? "classic" : "basic";
 }
 
-async function selectMap(id: string | null) {
-  current = maps.find((m) => m.id === id) ?? null;
+async function selectExport(id: string | null) {
+  current = exportsOf().find((e) => e.id === id) ?? null;
   populateStyles(current?.profile ?? "classic");
   if (current?.status === "ready") {
-    const sig = `${current.id}|${current.profile}|${(current.modules ?? []).join(",")}|${current.import_bytes}`;
+    const sig = `${current.id}|${current.bytes}`;
     if (sig !== styleFor) {
       styleFor = sig;
       $<HTMLSelectElement>("style").value = defaultStyleFor(current);
@@ -136,7 +183,8 @@ async function selectMap(id: string | null) {
     grid.setCoverage(null);
     return refreshMaps();
   }
-  if (current.bbox) map.fitBounds(current.bbox as [number, number, number, number], { padding: 30, duration: 0 });
+  const fit = current.region ?? current.bbox;
+  if (fit) map.fitBounds(fit as [number, number, number, number], { padding: 30, duration: 0 });
   if (ready) {
     applyStyle();
     try { grid.setCoverage(await api.coverage(current.id)); } catch { grid.setCoverage(null); }
@@ -151,7 +199,7 @@ async function selectMap(id: string | null) {
 function applyStyle() {
   if (!current) return;
   const style = $<HTMLSelectElement>("style").value || "basic";
-  map.setStyle(`/api/maps/${current.id}/style/${style}.json`);
+  map.setStyle(`/api/exports/${current.id}/style/${style}.json`);
 }
 
 /** Only styles whose required layers the map's import profile produces. */
@@ -192,22 +240,18 @@ function actionButton(label: string, onClick: () => void, danger = false): HTMLB
   return b;
 }
 
-async function deleteMapFlow(m: MapInfo, importOnly: boolean) {
+async function deleteMapFlow(m: MapInfo) {
+  const n = m.exports.length;
+  if (!confirm(`Usunąć mapę „${m.name}” razem z plikiem PBF (${formatBytes(m.source_bytes)}) ` +
+    `i wszystkimi eksportami (${n}, ${formatBytes(m.import_bytes)})?`)) return;
   let withOutputs = false;
-  if (importOnly) {
-    if (!confirm(`Usunąć dane importu mapy „${m.name}” (${formatBytes(m.import_bytes)})?\n` +
-      `Plik PBF zostanie zachowany, import można uruchomić ponownie.`)) return;
-  } else {
-    if (!confirm(`Usunąć mapę „${m.name}” razem z plikiem PBF (${formatBytes(m.source_bytes)}) ` +
-      `i danymi importu (${formatBytes(m.import_bytes)})?`)) return;
-    if (m.outputs > 0)
-      withOutputs = confirm(`Mapa ma ${m.outputs} wygenerowanych wyników. ` +
-        `OK = usuń je też, Anuluj = zostaw wyniki na dysku.`);
-  }
+  if (m.outputs > 0)
+    withOutputs = confirm(`Mapa ma ${m.outputs} wygenerowanych wyników. ` +
+      `OK = usuń je też, Anuluj = zostaw wyniki na dysku.`);
   try {
-    const r = await api.deleteMap(m.id, { importOnly, outputs: withOutputs });
+    const r = await api.deleteMap(m.id, { outputs: withOutputs });
     toast(`Zwolniono ${formatBytes(r.freed_bytes)}`);
-    if (current?.id === m.id) await selectMap(null);
+    if (current?.map_id === m.id) await selectExport(null);
     await refreshMaps();
     await refreshOutputs();
     renderLibrary();
@@ -230,18 +274,27 @@ async function afterDelete(m: MapInfo, freed: number) {
   renderLibrary();
 }
 
-async function deletePartFlow(m: MapInfo, part: MapPart, label: string, bytes: number) {
-  const extra = part === "source"
-    ? "\nBez pliku źródłowego nie da się zaimportować mapy ponownie (podgląd i generowanie nadal działają)."
-    : part === "import"
-      ? "\nPlik PBF zostanie zachowany, import można uruchomić ponownie. Podgląd przestanie działać do czasu importu."
-      : "";
-  if (!confirm(`Usunąć: ${label} (${formatBytes(bytes)})?${extra}`)) return;
+async function deleteSourceFlow(m: MapInfo, bytes: number) {
+  if (!confirm(`Usunąć plik źródłowy .osm.pbf mapy „${m.name}” (${formatBytes(bytes)})?\n` +
+    `Eksporty i ich podgląd zostają, ale nie da się utworzyć nowych eksportów z tego pliku.`)) return;
   try {
-    const r = await api.deletePart(m.id, part);
-    if (part === "import" && current?.id === m.id) await selectMap(null);
+    const r = await api.deleteSource(m.id);
     await afterDelete(m, r.freed_bytes);
   } catch (e) { toast(String(e)); }
+}
+
+async function deleteExportFlow(m: MapInfo, e: ExportInfo) {
+  if (!confirm(`Usunąć eksport „${e.name}” (${formatBytes(e.bytes)})?\n` +
+    `Plik PBF i pozostałe eksporty zostają.`)) return;
+  let withOutputs = false;
+  if (e.outputs > 0)
+    withOutputs = confirm(`Eksport ma ${e.outputs} wygenerowanych wyników. ` +
+      `OK = usuń je też, Anuluj = zostaw wyniki na dysku.`);
+  try {
+    const r = await api.deleteExport(e.id, withOutputs);
+    if (current?.id === e.id) await selectExport(null);
+    await afterDelete(m, r.freed_bytes);
+  } catch (err) { toast(String(err)); }
 }
 
 async function deleteOutputFlow(m: MapInfo, o: OutputInfo) {
@@ -252,22 +305,33 @@ async function deleteOutputFlow(m: MapInfo, o: OutputInfo) {
   } catch (e) { toast(String(e)); }
 }
 
+function profileLabel(e: ExportInfo): string {
+  const base = profiles.find((p) => p.id === e.profile)?.name ?? e.profile;
+  return e.profile === "custom" && e.modules ? `${base}: ${e.modules.length} elem.` : base;
+}
+
+function outputLine(o: OutputInfo): string {
+  return `Wynik: ${o.style} · z${o.min_zoom}${o.min_zoom !== o.max_zoom ? `–${o.max_zoom}` : ""} · ` +
+    `${o.tile_size}px ${o.format.toUpperCase()} ${o.scheme.toUpperCase()} · ` +
+    `${o.tiles.toLocaleString("pl-PL")} kafelków`;
+}
+
 function detailRow(m: MapInfo): HTMLTableRowElement {
   const tr = document.createElement("tr");
   tr.className = "detail";
   const cell = document.createElement("td");
-  cell.colSpan = 9;
+  cell.colSpan = 8;
   const c = contents.get(m.id);
   if (!c) {
     cell.textContent = "Wczytywanie…";
     tr.append(cell);
     return tr;
   }
-  const busy = m.status === "importing";
   const ul = document.createElement("ul");
   ul.className = "contents";
-  const item = (text: string, bytes: number, ...btns: HTMLButtonElement[]) => {
+  const item = (text: string, bytes: number, cls: string, ...btns: HTMLButtonElement[]) => {
     const li = document.createElement("li");
+    if (cls) li.className = cls;
     const label = document.createElement("span");
     label.textContent = text;
     const size = document.createElement("b");
@@ -275,61 +339,36 @@ function detailRow(m: MapInfo): HTMLTableRowElement {
     li.append(label, size, ...btns);
     ul.append(li);
   };
-  for (const p of c.parts) {
+  if (c.source_bytes > 0)
+    item("Plik źródłowy .osm.pbf", c.source_bytes, "",
+      actionButton("Usuń", () => deleteSourceFlow(m, c.source_bytes), true));
+  const known = new Set(c.exports.map((e) => e.id));
+  for (const e of c.exports) {
     const btns: HTMLButtonElement[] = [];
-    if (p.key === "log")
-      btns.push(actionButton("Pokaż", async () => {
-        const pre = $("library-log");
-        pre.textContent = (await api.importLog(m.id)).log || "(pusty log)";
-        pre.hidden = false;
-      }));
-    if (!busy) btns.push(actionButton("Usuń", () => deletePartFlow(m, p.key, p.label, p.bytes), true));
-    item(p.label, p.bytes, ...btns);
-  }
-  for (const i of c.imports) {
-    const baseName = profiles.find((p) => p.id === i.profile)?.name ?? i.profile ?? "?";
-    const name = i.profile === "custom" && i.modules ? `${baseName}: ${i.modules.length} elem.` : baseName;
-    const btns: HTMLButtonElement[] = [];
-    if (!busy) {
-      btns.push(actionButton("Użyj", async () => {
-        try {
-          await api.activateImport(m.id, i.id);
-          contents.delete(m.id);
-          await refreshMaps();
-          if (current?.id === m.id) await selectMap(m.id);
-          void loadContents(m.id);
-        } catch (e) { toast(String(e)); }
-      }));
-      btns.push(actionButton("Usuń", async () => {
-        if (!confirm(`Usunąć zarchiwizowany import (${name}, ${formatBytes(i.size_bytes)}) z dysku?`)) return;
-        try {
-          await api.deleteImport(m.id, i.id);
-          await afterDelete(m, i.size_bytes);
-        } catch (e) { toast(String(e)); }
-      }, true));
-    }
+    if (e.status === "ready")
+      btns.push(actionButton("Otwórz", async () => { await selectExport(e.id); library.close(); }));
+    btns.push(actionButton("Log", async () => {
+      const pre = $("library-log");
+      pre.textContent = (await api.exportLog(e.id)).log || "(pusty log)";
+      pre.hidden = false;
+    }));
+    if (e.status !== "importing") btns.push(actionButton("Usuń", () => deleteExportFlow(m, e), true));
     item(
-      `Zarchiwizowany import: ${name}${i.region ? " · wycinek" : " · cały plik"} · ` +
-        new Date(i.created_at * 1000).toLocaleString("pl-PL"),
-      i.size_bytes,
-      ...btns,
-    );
+      `Eksport „${e.name}”: ${profileLabel(e)}${e.region ? " · wycinek" : " · cały plik"} · ` +
+        `${STATUS_EXPORT[e.status]} · ${new Date(e.created_at * 1000).toLocaleString("pl-PL")}`,
+      e.bytes, "", ...btns);
+    for (const o of c.outputs.filter((x) => x.export_id === e.id))
+      item(outputLine(o), o.size_bytes, "sub", actionButton("Usuń", () => deleteOutputFlow(m, o), true));
   }
-  for (const o of c.outputs)
-    item(
-      `Wynik: ${o.style} · z${o.min_zoom}${o.min_zoom !== o.max_zoom ? `–${o.max_zoom}` : ""} · ` +
-        `${o.tile_size}px ${o.format.toUpperCase()} ${o.scheme.toUpperCase()} · ` +
-        `${o.tiles.toLocaleString("pl-PL")} kafelków`,
-      o.size_bytes,
-      actionButton("Usuń", () => deleteOutputFlow(m, o), true),
-    );
-  if (!c.parts.length && !c.outputs.length && !c.imports.length) {
+  for (const o of c.outputs.filter((x) => !x.export_id || !known.has(x.export_id)))
+    item(`${outputLine(o)} (bez eksportu)`, o.size_bytes, "", actionButton("Usuń", () => deleteOutputFlow(m, o), true));
+  if (!c.source_bytes && !c.exports.length && !c.outputs.length) {
     const li = document.createElement("li");
     li.textContent = "Brak plików.";
     ul.append(li);
   }
-  const total = c.parts.reduce((a, p) => a + p.bytes, 0) + c.outputs.reduce((a, o) => a + o.size_bytes, 0) +
-    c.imports.reduce((a, i) => a + i.size_bytes, 0);
+  const total = c.source_bytes + c.exports.reduce((a, e) => a + e.bytes, 0) +
+    c.outputs.reduce((a, o) => a + o.size_bytes, 0);
   const sum = document.createElement("p");
   sum.className = "muted";
   sum.textContent = `Razem: ${formatBytes(total)}`;
@@ -345,53 +384,36 @@ function renderLibrary() {
   for (const m of maps) {
     total += m.source_bytes + m.import_bytes;
     const tr = document.createElement("tr");
-    if (m.id === current?.id) tr.classList.add("active");
-    const badge = document.createElement("span");
-    badge.className = `badge ${m.status}`;
-    badge.textContent = m.status;
-    badge.title = m.message ?? "";
-    const areaCell = td(m.bbox ? m.bbox.map((v) => v.toFixed(2)).join("  ") : "–");
-    const profileName = profiles.find((p) => p.id === m.profile)?.name ?? m.profile;
-    const note = document.createElement("div");
-    note.className = "muted";
-    const modNote = m.profile === "custom" && m.modules ? ` (${m.modules.length} elem.)` : "";
-    note.textContent = `profil: ${profileName}${modNote}${m.region ? " · wycinek" : ""}`;
-    areaCell.append(note);
+    if (m.exports.some((e) => e.id === current?.id)) tr.classList.add("active");
     const open = expanded.has(m.id);
     const toggle = actionButton(open ? "▾" : "▸", () => {
       if (expanded.has(m.id)) expanded.delete(m.id);
       else { expanded.add(m.id); void loadContents(m.id); }
       renderLibrary();
     });
-    toggle.title = "Pokaż zawartość i zajęte miejsce";
+    toggle.title = "Pokaż eksporty, wyniki i zajęte miejsce";
     const actions = document.createElement("td");
     actions.className = "actions";
-    const busy = m.status === "importing";
-    actions.append(
-      actionButton("Wybierz", async () => { await selectMap(m.id); library.close(); }),
-    );
-    if (!busy) {
-      if (m.source_bytes > 0)
-        actions.append(
-          actionButton(m.status === "ready" ? "Importuj inaczej…" : "Importuj…", () => void openImportDialog(m)),
-        );
-      actions.append(actionButton("Usuń mapę", () => deleteMapFlow(m, false), true));
-    }
+    if (m.source_bytes > 0)
+      actions.append(actionButton("Nowy eksport…", () => void openImportDialog(m)));
+    if (!m.exports.some((e) => e.status === "importing"))
+      actions.append(actionButton("Usuń mapę", () => deleteMapFlow(m), true));
+    const exportsCell = td(`${m.exports.length} · ${formatBytes(m.import_bytes)}`);
     tr.append(
       td(toggle),
       td(m.name),
       td(new Date(m.created_at * 1000).toLocaleString("pl-PL")),
-      areaCell,
-      td(badge),
+      td(m.bbox ? m.bbox.map((v) => v.toFixed(2)).join("  ") : "–"),
       td(formatBytes(m.source_bytes)),
-      td(formatBytes(m.import_bytes)),
+      exportsCell,
       td(String(m.outputs)),
       actions,
     );
     body.appendChild(tr);
     if (open) body.appendChild(detailRow(m));
   }
-  $("library-total").textContent = `Map: ${maps.length} · zajęte miejsce (pliki map): ${formatBytes(total)}`;
+  $("library-total").textContent =
+    `Map: ${maps.length} · eksportów: ${exportsOf().length} · zajęte miejsce (pliki map): ${formatBytes(total)}`;
 }
 
 $("open-library").addEventListener("click", async () => {
@@ -401,11 +423,11 @@ $("open-library").addEventListener("click", async () => {
   library.showModal();
 });
 
-// ------------------------------------------------------------------ import dialog, area & sample
+// ------------------------------------------------------------------ new export dialog, area & sample
 
 const importDlg = $<HTMLDialogElement>("import-dlg");
 let importTarget: MapInfo | null = null;
-let importRect: BBox | null = null;
+let importRects: BBox[] = [];
 let sampleMode: { mapId: string; profile: string } | null = null;
 
 const importProfile = () => $<HTMLSelectElement>("import-profile").value;
@@ -422,7 +444,6 @@ function renderModules(checked: string[] | null) {
     cb.type = "checkbox";
     cb.value = m.id;
     cb.checked = checked ? checked.includes(m.id) : m.default;
-    cb.addEventListener("change", updateImportUi);
     const desc = document.createElement("span");
     desc.className = "muted";
     desc.textContent = ` ${m.description}`;
@@ -436,23 +457,17 @@ const areaMode = () =>
 const setArea = (v: "all" | "rect") =>
   (document.querySelector<HTMLInputElement>(`input[name="import-area"][value="${v}"]`)!.checked = true);
 
-const sameModules = (a: string[] | null, b: string[] | null) =>
-  [...(a ?? [])].sort().join() === [...(b ?? [])].sort().join();
-
 function updateImportUi() {
   $("import-modules").hidden = importProfile() !== "custom";
   $("import-profile-desc").textContent = profiles.find((p) => p.id === importProfile())?.description ?? "";
-  // Merging only makes sense into a partial import made with the same profile.
-  const canMerge = !!importTarget && importTarget.status === "ready" && !!importTarget.region &&
-    importTarget.profile === importProfile() && areaMode() === "rect" &&
-    (importProfile() !== "custom" || sameModules(importTarget.modules, importModules()));
-  $("import-merge-row").hidden = !canMerge;
-  $("import-bbox").textContent = importRect ? importRect.map((v) => v.toFixed(3)).join("  ") : "";
+  $("import-bbox").textContent = importRects.length
+    ? `${importRects.length} prostokąt(y)` : "";
+  $("import-clear").hidden = importRects.length === 0;
 }
 
 async function openImportDialog(m: MapInfo) {
   importTarget = m;
-  importRect = null;  // draw the new area; the existing one is merged with it when requested
+  importRects = [];
   if (!profiles.length) {
     try { profiles = await api.profiles(); } catch (e) { return toast(String(e)); }
   }
@@ -460,10 +475,11 @@ async function openImportDialog(m: MapInfo) {
   const sel = $<HTMLSelectElement>("import-profile");
   sel.innerHTML = "";
   for (const p of profiles) sel.add(new Option(p.name, p.id));
-  sel.value = profiles.some((p) => p.id === m.profile) ? m.profile : profiles[0]?.id ?? "";
-  renderModules(m.profile === "custom" ? m.modules : null);
-  setArea(m.region ? "rect" : "all");
-  $("import-title").textContent = `Import: ${m.name}`;
+  sel.value = profiles.some((p) => p.id === "classic") ? "classic" : profiles[0]?.id ?? "";
+  renderModules(null);
+  $<HTMLInputElement>("import-name").value = "";
+  setArea("all");
+  $("import-title").textContent = `Nowy eksport: ${m.name}`;
   updateImportUi();
   library.close();
   importDlg.showModal();
@@ -495,7 +511,9 @@ function drawRect(): Promise<BBox | null> {
       resolve(b);
     };
     const onDown = (e: maplibregl.MapMouseEvent) => { start = e.lngLat; };
-    const onMove = (e: maplibregl.MapMouseEvent) => { if (start) setDraft(rectOf(start, e.lngLat)); };
+    const onMove = (e: maplibregl.MapMouseEvent) => {
+      if (start) setDraft([...importRects, rectOf(start, e.lngLat)]);
+    };
     const onUp = (e: maplibregl.MapMouseEvent) => {
       if (!start) return;
       const b = rectOf(start, e.lngLat);
@@ -512,41 +530,49 @@ function drawRect(): Promise<BBox | null> {
 async function chooseRect() {
   importDlg.close();
   const b = await drawRect();
-  if (b) importRect = b;
-  setDraft(importRect);
-  setArea(importRect ? "rect" : "all");
+  if (b) importRects.push(b);
+  setDraft(importRects);
+  setArea(importRects.length ? "rect" : "all");
   updateImportUi();
   importDlg.showModal();
 }
 
 $("import-draw").addEventListener("click", () => void chooseRect());
+$("import-clear").addEventListener("click", () => {
+  importRects = [];
+  setDraft([]);
+  setArea("all");
+  updateImportUi();
+});
 document.querySelectorAll<HTMLInputElement>('input[name="import-area"]').forEach((r) =>
   r.addEventListener("change", () => {
-    if (areaMode() === "rect" && !importRect) void chooseRect();
-    setDraft(areaMode() === "rect" ? importRect : null);
+    if (areaMode() === "rect" && !importRects.length) void chooseRect();
+    setDraft(areaMode() === "rect" ? importRects : []);
     updateImportUi();
   }));
 $("import-profile").addEventListener("change", updateImportUi);
-importDlg.addEventListener("close", () => { if (!sampleMode) setDraft(null); });
+importDlg.addEventListener("close", () => { if (!sampleMode) setDraft([]); });
 
 $("import-start").addEventListener("click", async () => {
   const m = importTarget;
   if (!m) return;
   const rect = areaMode() === "rect";
-  const bbox = rect ? importRect : null;
-  if (rect && !bbox) return toast("Narysuj prostokąt albo wybierz „cały plik”");
+  const bboxes = rect ? importRects : null;
+  if (rect && !importRects.length) return toast("Narysuj prostokąt albo wybierz „cały plik”");
   if (!rect && importProfile() !== "classic" && m.source_bytes > 300 * 1024 ** 2 &&
       !confirm(`Plik ma ${formatBytes(m.source_bytes)}. Ten profil dla całego pliku może trwać bardzo długo ` +
         `i zużyć dużo pamięci. Czy na pewno nie ograniczyć obszaru?\nOK = importuj cały plik mimo to.`)) return;
-  const merge = areaMode() === "rect" && !$("import-merge-row").hidden &&
-    $<HTMLInputElement>("import-merge").checked;
-  if (m.status === "ready" && !merge &&
-      !confirm("Nowy import stanie się aktywny, a obecny trafi do archiwum tej mapy (można go później przywrócić). Nic nie jest usuwane. Kontynuować?")) return;
   try {
-    await api.importMap(m.id, importProfile(), bbox, merge, importModules());
+    const res = await api.createExport(m.id, {
+      name: $<HTMLInputElement>("import-name").value.trim(),
+      profile: importProfile(),
+      modules: importModules(),
+      bboxes,
+    });
     importDlg.close();
-    toast("Import dodany do kolejki");
+    toast("Eksport dodany do kolejki");
     await refreshMaps();
+    await selectExport(res.export_id);  // opens by itself when the import finishes
     void refreshJobs();
   } catch (e) { toast(String(e)); }
 });
@@ -559,7 +585,7 @@ function sampleStyleId(profile: string): string {
 }
 
 function sampleBBox(m: MapInfo): BBox {
-  if (areaMode() === "rect" && importRect) return importRect;
+  if (areaMode() === "rect" && importRects.length) return importRects[importRects.length - 1];
   const v = map.getBounds();
   const view: BBox = [v.getWest(), v.getSouth(), v.getEast(), v.getNorth()];
   const cx = (view[0] + view[2]) / 2;
@@ -597,10 +623,10 @@ $("import-sample").addEventListener("click", async () => {
     if (job.status !== "done") throw new Error(job.message ?? "Nie udało się wygenerować próbki");
     sampleMode = { mapId: m.id, profile };
     importDlg.close();
-    map.setStyle(`/api/maps/${m.id}/style/${sampleStyleId(profile)}.json?variant=sample`);
+    map.setStyle(`/api/maps/${m.id}/sample/style/${sampleStyleId(profile)}.json`);
     map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 30, duration: 0 });
     const name = profiles.find((p) => p.id === profile)?.name ?? profile;
-    $("sample-text").textContent = `Próbka (ok. 10×10 km), profil „${name}”. Tak będzie wyglądał import.`;
+    $("sample-text").textContent = `Próbka (ok. 10×10 km), profil „${name}”. Tak będzie wyglądał eksport.`;
     $("sample-bar").hidden = false;
   } catch (e) {
     toast(`Próbka: ${e}`);
@@ -614,9 +640,9 @@ async function exitSample() {
   const sm = sampleMode;
   sampleMode = null;
   $("sample-bar").hidden = true;
-  setDraft(null);
+  setDraft([]);
   if (sm) void api.deleteSample(sm.mapId).catch(() => undefined);
-  await selectMap(current?.id ?? null);
+  await selectExport(current?.id ?? null);
 }
 
 $("sample-close").addEventListener("click", () => void exitSample());
@@ -634,9 +660,8 @@ $<HTMLInputElement>("file").addEventListener("change", async (ev) => {
   const prog = $("upload-progress");
   try {
     const res = await uploadPbf(file, (p) => (prog.textContent = `Wysyłanie ${file.name}: ${(p * 100).toFixed(1)}%`));
-    prog.textContent = "Wysłano. Wybierz profil i obszar, a potem uruchom import.";
+    prog.textContent = "Wysłano. Ustaw parametry pierwszego eksportu.";
     await refreshMaps();
-    await selectMap(res.map_id);
     const uploaded = maps.find((m) => m.id === res.map_id);
     if (uploaded) await openImportDialog(uploaded);
   } catch (e) {
@@ -698,7 +723,7 @@ $("generate").addEventListener("click", async () => {
   if (!confirm(`Wygenerować ${tiles.toLocaleString("pl-PL")} kafelków?`)) return;
   try {
     await api.render({
-      map_id: current.id,
+      export_id: current.id,
       style: $<HTMLSelectElement>("style").value,
       grid_zoom: grid.gridZ,
       min_zoom: min,
@@ -727,7 +752,8 @@ async function refreshJobs() {
   for (const j of jobs.slice(0, 15)) {
     const li = document.createElement("li");
     const label = { import: "Import", render: "Render", sample: "Próbka" }[j.kind];
-    const mapName = maps.find((m) => m.id === j.map_id)?.name ?? "";
+    const exp = exportsOf().find((e) => e.id === j.export_id);
+    const mapName = exp ? exportLabel(exp) : maps.find((m) => m.id === j.map_id)?.name ?? "";
     li.innerHTML = `<span>${label} <span class="muted">${mapName}</span><br>
       <span class="muted">${j.message ?? ""}</span></span>
       ${j.status === "running" ? `<progress value="${j.progress}"></progress>` : ""}
@@ -762,7 +788,8 @@ async function refreshOutputs() {
   ul.innerHTML = "";
   for (const o of outs) {
     const li = document.createElement("li");
-    const mapName = maps.find((m) => m.id === o.map_id)?.name ?? o.map_id;
+    const exp = exportsOf().find((e) => e.id === o.export_id);
+    const mapName = exp ? exportLabel(exp) : maps.find((m) => m.id === o.map_id)?.name ?? o.map_id;
     li.innerHTML = `<span>${mapName} · z${o.min_zoom}${o.min_zoom !== o.max_zoom ? `–${o.max_zoom}` : ""}
       · ${o.tile_size}px ${o.format.toUpperCase()} ${o.scheme.toUpperCase()}<br>
       <span class="muted">${o.tiles} kafelków · ${formatBytes(o.size_bytes)} · ${o.created_at}</span></span>

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .. import db
 from ..core.config import get_settings
+from ..importer import exports
 from ..jobs import queue
 from ..render.base import TILE_SIZES
 from ..tiles import xyz
@@ -19,7 +20,7 @@ MAX_TILES_PER_JOB = 5_000_000
 
 
 class RenderJobIn(BaseModel):
-    map_id: str
+    export_id: str
     style: str
     grid_zoom: int = Field(ge=0, le=22)
     min_zoom: int = Field(ge=0, le=22)
@@ -58,7 +59,7 @@ def estimate_tiles(body: RenderJobIn) -> int:
 def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
     with db.connect() as c:
         rows = c.execute(
-            "SELECT id, kind, map_id, status, progress, message, created_at, updated_at"
+            "SELECT id, kind, map_id, export_id, status, progress, message, created_at, updated_at"
             " FROM jobs ORDER BY created_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -101,18 +102,18 @@ def get_job(job_id: str) -> dict[str, Any]:
 
 @router.post("/render")
 def start_render(body: RenderJobIn) -> dict[str, Any]:
-    with db.connect() as c:
-        m = c.execute("SELECT status FROM maps WHERE id = ?", (body.map_id,)).fetchone()
-    if m is None:
-        raise HTTPException(404, "Nie ma takiej mapy")
-    if m["status"] != "ready":
-        raise HTTPException(409, "Mapa nie jest jeszcze gotowa")
+    exp = exports.get_export(body.export_id) if body.export_id.isalnum() else None
+    if exp is None:
+        raise HTTPException(404, "Nie ma takiego eksportu")
+    if exp["status"] != "ready":
+        raise HTTPException(409, "Eksport nie jest jeszcze gotowy")
     if not (get_settings().styles_dir / body.style / "style.json").exists():
         raise HTTPException(400, "Nieznany styl")
     n = estimate_tiles(body)
     if n > MAX_TILES_PER_JOB:
         raise HTTPException(413, f"Za dużo kafelków ({n}). Zmniejsz obszar lub zoom.")
-    job_id = queue.enqueue("render", body.model_dump(), map_id=body.map_id)
+    params = {**body.model_dump(), "map_id": exp["map_id"]}
+    job_id = queue.enqueue("render", params, map_id=exp["map_id"], export_id=body.export_id)
     return {"job_id": job_id, "tiles": n}
 
 

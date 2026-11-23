@@ -11,8 +11,8 @@ from typing import Any
 
 from .. import db
 from ..core.config import get_settings
-from ..importer import archive, modules as modules_mod, regions as regions_mod
-from ..importer.profiles import DEFAULT_PROFILE, get_profile
+from ..importer import exports, modules as modules_mod
+from ..importer.profiles import get_profile
 from ..importer.tilemaker import extract_region, run_tilemaker
 from ..osm.analyze import coverage_from_mbtiles, read_bbox
 from ..render.base import FORMATS, RenderRequest, encode, get_engine
@@ -24,12 +24,6 @@ log = logging.getLogger("osm-tilegen.jobs")
 
 def map_dir(map_id: str) -> Path:
     return get_settings().maps_dir / map_id
-
-
-def _set_map(map_id: str, **fields: Any) -> None:
-    cols = ", ".join(f"{k} = ?" for k in fields)
-    with db.connect() as c:
-        c.execute(f"UPDATE maps SET {cols} WHERE id = ?", (*fields.values(), map_id))
 
 
 # --------------------------------------------------------------------- import
@@ -80,40 +74,49 @@ def _tilemaker_with_profile(
             g.unlink(missing_ok=True)
 
 
+def _set_export(export_id: str, **fields: Any) -> None:
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    with db.connect() as c:
+        c.execute(f"UPDATE exports SET {cols} WHERE id = ?", (*fields.values(), export_id))
+
+
 def handle_import(job: dict[str, Any]) -> None:
-    """Import into ``*.new`` files; the previous import is archived, never deleted."""
+    """Build one export folder (vector MBTiles, coverage mask, log) from a source PBF."""
     settings = get_settings()
     map_id = job["map_id"]
+    export_id = job.get("export_id")
+    exp = exports.get_export(export_id) if export_id else None
+    if exp is None:
+        raise RuntimeError("Zadanie importu bez eksportu (stary format), utwórz eksport od nowa")
     params = job.get("params") or {}
-    profile_id = params.get("profile", DEFAULT_PROFILE)
+    profile_id = params.get("profile", exp["profile"])
     modules = params.get("modules") if profile_id == modules_mod.CUSTOM_PROFILE else None
-    areas = params.get("regions") or ([params["region"]] if params.get("region") else None)
-    if areas:
-        areas = [list(b) for b in regions_mod.merge_bboxes([tuple(a) for a in areas])]
-    region = list(regions_mod.outline([tuple(a) for a in areas])) if areas else None
+    areas = params.get("regions") or None
     mdir = map_dir(map_id)
+    edir = exports.export_dir(map_id, export_id)
+    edir.mkdir(parents=True, exist_ok=True)
     pbf = mdir / "source.osm.pbf"
-    out = mdir / "vector.new.mbtiles"
-    cov_new = mdir / "coverage.new.json"
-    logfile = mdir / "import.new.log"
-    with db.connect() as c:
-        current = db.row_to_dict(c.execute("SELECT * FROM maps WHERE id = ?", (map_id,)).fetchone()) or {}
-    _set_map(map_id, status="importing", message=None)
+    out = edir / exports.VECTOR
+    cov = edir / exports.COVERAGE
+    _set_export(export_id, status="importing", message=None)
 
     try:
-        with logfile.open("w", encoding="utf-8") as lf:
+        with (edir / exports.LOG).open("w", encoding="utf-8") as lf:
             def emit(line: str) -> None:
                 lf.write(line + "\n")
                 lf.flush()
 
             emit(f"profile: {profile_id}, modules: {modules}, areas: {areas}")
-            queue.update(job["id"], progress=0.05, message="Odczyt zasięgu pliku")
-            if shutil.which(settings.osmium_bin) is None:
-                raise RuntimeError("Brak programu osmium (apt install osmium-tool)")
-            bbox = read_bbox(pbf, settings.osmium_bin)
+            bbox = exp.get("bbox")
+            if not bbox:
+                queue.update(job["id"], progress=0.05, message="Odczyt zasięgu pliku")
+                if shutil.which(settings.osmium_bin) is None:
+                    raise RuntimeError("Brak programu osmium (apt install osmium-tool)")
+                bbox = read_bbox(pbf, settings.osmium_bin)
+                bbox = list(bbox) if bbox else None
             emit(f"bbox: {bbox}")
 
-            _tilemaker_with_profile(job, mdir, emit, out, profile_id, areas, pbf, modules)
+            _tilemaker_with_profile(job, edir, emit, out, profile_id, areas, pbf, modules)
 
             queue.update(job["id"], progress=0.95, message="Maska pokrycia")
             tiles = coverage_from_mbtiles(out, settings.coverage_zoom)
@@ -122,31 +125,20 @@ def handle_import(job: dict[str, Any]) -> None:
                     t for box in (areas or [bbox])
                     for t in xyz.bbox_to_tiles(tuple(box), settings.coverage_zoom)
                 })
-            cov_new.write_text(
+            cov.write_text(
                 json.dumps({"zoom": settings.coverage_zoom, "tiles": tiles}), encoding="utf-8"
             )
             emit(f"coverage: {len(tiles)} tiles at z{settings.coverage_zoom}")
     except BaseException:
-        for leftover in (out, cov_new, out.with_suffix(".tmp.mbtiles")):
+        # Keep the folder and its log (the user can read what went wrong), drop partial results.
+        for leftover in (out, cov, out.with_suffix(".tmp.mbtiles")):
             leftover.unlink(missing_ok=True)
         raise
 
-    # Success: the previous import is moved to imports/<id>/, the new one becomes active.
-    archive.archive_active(mdir, current)
-    out.replace(mdir / archive.VECTOR)
-    cov_new.replace(mdir / archive.COVERAGE)
-    logfile.replace(mdir / archive.LOG)
-    archive.write_active_meta(mdir, profile_id, region, bbox, areas, modules)
-    _set_map(
-        map_id,
-        status="ready",
-        message=None,
-        bbox=json.dumps(bbox) if bbox else None,
-        profile=profile_id,
-        modules=json.dumps(modules) if modules is not None else None,
-        region=json.dumps(region) if region else None,
-        regions=json.dumps(areas) if areas else None,
-    )
+    _set_export(export_id, status="ready", message=None, bbox=json.dumps(bbox) if bbox else None)
+    exports.write_meta(edir, {**exp, "bbox": bbox})
+    with db.connect() as c:  # remember the file's extent on the source as well
+        c.execute("UPDATE maps SET bbox = COALESCE(bbox, ?) WHERE id = ?", (json.dumps(bbox) if bbox else None, map_id))
 
 
 def handle_sample(job: dict[str, Any]) -> None:
@@ -184,7 +176,7 @@ def handle_render(job: dict[str, Any]) -> None:
     settings = get_settings()
     p = job["params"]
     map_id = job["map_id"]
-    mdir = map_dir(map_id)
+    export_id = p["export_id"]
     root = settings.output_dir / job["id"]
     root.mkdir(parents=True, exist_ok=True)
 
@@ -201,7 +193,7 @@ def handle_render(job: dict[str, Any]) -> None:
 
     fmt, scheme = p["format"], p.get("scheme", "xyz")
     req = RenderRequest(
-        mbtiles=mdir / "vector.mbtiles",
+        mbtiles=exports.export_dir(map_id, export_id) / exports.VECTOR,
         style_path=settings.styles_dir / p["style"] / "style.json",
         tile_px=int(p["tile_px"]),
         fmt=fmt,
@@ -231,6 +223,7 @@ def handle_render(job: dict[str, Any]) -> None:
     meta = {
         "job_id": job["id"],
         "map_id": map_id,
+        "export_id": export_id,
         "style": p["style"],
         "min_zoom": zooms[0],
         "max_zoom": zooms[-1],
@@ -249,12 +242,9 @@ HANDLERS = {"import": handle_import, "render": handle_render, "sample": handle_s
 
 
 def _import_failed(job: dict[str, Any], message: str) -> None:
-    """A failed import keeps the previous active import usable."""
-    map_id = job["map_id"]
-    if (map_dir(map_id) / archive.VECTOR).exists():
-        _set_map(map_id, status="ready", message=message)
-    else:
-        _set_map(map_id, status="failed", message=message)
+    """A failed export stays in the list as 'failed' (with its log) until the user deletes it."""
+    if job.get("export_id"):
+        _set_export(job["export_id"], status="failed", message=message)
 
 
 def run_job(job: dict[str, Any]) -> None:
@@ -263,10 +253,10 @@ def run_job(job: dict[str, Any]) -> None:
         queue.update(job["id"], status="done", progress=1.0)
     except InterruptedError:
         queue.update(job["id"], status="cancelled", message="Anulowano")
-        if job["kind"] == "import" and job["map_id"]:
+        if job["kind"] == "import":
             _import_failed(job, "Import anulowany")
     except Exception as exc:  # noqa: BLE001 - report every failure to the UI
         log.exception("job %s failed", job["id"])
         queue.update(job["id"], status="failed", message=str(exc))
-        if job["kind"] == "import" and job["map_id"]:
+        if job["kind"] == "import":
             _import_failed(job, str(exc))

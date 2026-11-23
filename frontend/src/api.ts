@@ -1,21 +1,34 @@
 export type BBox = [number, number, number, number];
 
-export interface MapInfo {
+/** A folder of vector tiles made from a source file; this is what is browsed and rendered. */
+export interface ExportInfo {
   id: string;
+  map_id: string;
   name: string;
-  filename: string;
-  size_bytes: number;
-  status: "uploaded" | "importing" | "ready" | "failed";
-  bbox: BBox | null;
+  status: "importing" | "ready" | "failed";
   message: string | null;
   profile: string;
   modules: string[] | null;
   region: BBox | null;
   regions: BBox[] | null;
+  bbox: BBox | null;
+  created_at: number;
+  bytes: number;
+  outputs: number;
+}
+
+/** A source: an uploaded .osm.pbf with the exports made from it. */
+export interface MapInfo {
+  id: string;
+  name: string;
+  filename: string;
+  size_bytes: number;
+  bbox: BBox | null;
   created_at: number;
   source_bytes: number;
   import_bytes: number;
   outputs: number;
+  exports: ExportInfo[];
 }
 
 export interface DeleteResult { ok: boolean; freed_bytes: number; removed_outputs: number; }
@@ -24,6 +37,7 @@ export interface Job {
   id: string;
   kind: "import" | "render" | "sample";
   map_id: string | null;
+  export_id: string | null;
   status: "queued" | "running" | "done" | "failed" | "cancelled";
   progress: number;
   message: string | null;
@@ -32,6 +46,7 @@ export interface Job {
 export interface OutputInfo {
   job_id: string;
   map_id: string;
+  export_id?: string | null;
   style: string;
   min_zoom: number;
   max_zoom: number;
@@ -43,20 +58,17 @@ export interface OutputInfo {
   created_at: string;
 }
 
-export type MapPart = "source" | "import" | "log";
-export interface ArchivedImport {
-  id: string;
-  profile: string | null;
-  modules?: string[] | null;
-  region: BBox | null;
-  bbox: BBox | null;
-  created_at: number;
-  size_bytes: number;
-}
 export interface MapContents {
-  parts: { key: MapPart; label: string; bytes: number }[];
+  source_bytes: number;
+  exports: ExportInfo[];
   outputs: OutputInfo[];
-  imports: ArchivedImport[];
+}
+
+export interface NewExport {
+  name: string;
+  profile: string;
+  modules: string[] | null;
+  bboxes: BBox[] | null;
 }
 
 export interface Coverage { zoom: number; tiles: [number, number][]; }
@@ -84,29 +96,23 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 
 export const api = {
   maps: () => req<MapInfo[]>("GET", "/api/maps"),
-  deleteMap: (id: string, opts: { importOnly?: boolean; outputs?: boolean } = {}) =>
-    req<DeleteResult>(
-      "DELETE",
-      `/api/maps/${id}?import_only=${!!opts.importOnly}&outputs=${!!opts.outputs}`,
-    ),
+  deleteMap: (id: string, opts: { outputs?: boolean } = {}) =>
+    req<DeleteResult>("DELETE", `/api/maps/${id}?outputs=${!!opts.outputs}`),
   contents: (id: string) => req<MapContents>("GET", `/api/maps/${id}/contents`),
-  deletePart: (id: string, part: MapPart) =>
-    req<{ freed_bytes: number }>("DELETE", `/api/maps/${id}/parts/${part}`),
+  deleteSource: (id: string) =>
+    req<{ freed_bytes: number }>("DELETE", `/api/maps/${id}/parts/source`),
   profiles: () => req<ProfileInfo[]>("GET", "/api/profiles"),
   modules: () => req<ModuleInfo[]>("GET", "/api/modules"),
-  importMap: (id: string, profile: string, bbox: BBox | null, merge = false, modules: string[] | null = null) =>
-    req<{ job_id: string }>("POST", `/api/maps/${id}/import`, { profile, bbox, merge, modules }),
+  createExport: (mapId: string, body: NewExport) =>
+    req<{ export_id: string; job_id: string }>("POST", `/api/maps/${mapId}/exports`, body),
+  deleteExport: (id: string, outputs = false) =>
+    req<DeleteResult>("DELETE", `/api/exports/${id}?outputs=${outputs}`),
+  exportLog: (id: string) => req<{ log: string }>("GET", `/api/exports/${id}/log`),
+  coverage: (exportId: string) => req<Coverage>("GET", `/api/exports/${exportId}/coverage`),
   createSample: (id: string, profile: string, bbox: BBox, modules: string[] | null = null) =>
     req<{ job_id: string; bbox: BBox }>("POST", `/api/maps/${id}/sample`, { profile, bbox, modules }),
   sampleInfo: (id: string) => req<SampleInfo>("GET", `/api/maps/${id}/sample`),
   deleteSample: (id: string) => req("DELETE", `/api/maps/${id}/sample`),
-  activateImport: (id: string, imp: string) =>
-    req("POST", `/api/maps/${id}/imports/${imp}/activate`),
-  deleteImport: (id: string, imp: string) =>
-    req<{ freed_bytes: number }>("DELETE", `/api/maps/${id}/imports/${imp}`),
-  reimport: (id: string) => req<{ job_id: string }>("POST", `/api/maps/${id}/reimport`),
-  importLog: (id: string) => req<{ log: string }>("GET", `/api/maps/${id}/log`),
-  coverage: (id: string) => req<Coverage>("GET", `/api/maps/${id}/coverage`),
   styles: () => req<StyleInfo[]>("GET", "/api/styles"),
   jobs: () => req<Job[]>("GET", "/api/jobs"),
   deleteJob: (id: string) => req("DELETE", `/api/jobs/${id}`),
